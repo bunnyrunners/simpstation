@@ -41,7 +41,7 @@ def init_db():
                 simp_name TEXT NOT NULL,
                 status TEXT NOT NULL,
                 intent TEXT,
-                phone TEXT UNIQUE NOT NULL,  -- phone is explicitly TEXT
+                phone TEXT UNIQUE NOT NULL,
                 duration INTEGER,
                 created DATE
             )
@@ -50,6 +50,15 @@ def init_db():
         print("✅ DB: Database initialized (table 'simps' created if not exists).", flush=True)
     except Exception as e:
         print(f"❌ DB: Error during DB initialization: {e}", flush=True)
+    
+    # Force the phone column to be TEXT even if table existed before
+    try:
+        cursor.execute("ALTER TABLE simps ALTER COLUMN phone TYPE TEXT USING phone::text;")
+        conn.commit()
+        print("✅ DB: Ensured 'phone' column is TEXT.", flush=True)
+    except Exception as e:
+        print(f"⚠️ DB: Could not alter 'phone' column to TEXT (it might already be TEXT): {e}", flush=True)
+    
     cursor.close()
     conn.close()
     print("🔍 DB: Starting Airtable sync...", flush=True)
@@ -90,7 +99,7 @@ def sync_airtable_to_postgres():
                 fields.get("Simp"),
                 fields.get("Status"),
                 fields.get("🤝Intent"),
-                str(fields.get("Phone")),  # Convert to string to ensure TEXT storage.
+                str(fields.get("Phone")),  # Cast to string to ensure TEXT storage.
                 fields.get("Duration"),
                 fields.get("Created")
             ))
@@ -190,15 +199,15 @@ def create_app():
         text = message_obj.get("text", "")
         print(f"🔍 /handle_telegram: Raw text received: '{text}'", flush=True)
 
-        # Split the message so that the first token is the simp_id and the rest is the message.
+        # Extract the Simp_ID (first token) and the remaining message
         tokens = text.strip().split(maxsplit=1)
         if len(tokens) < 2:
             print("❌ /handle_telegram: Message format invalid; not enough tokens.", flush=True)
             return {"error": "Invalid message format"}, 400
 
         simp_id_str = tokens[0]
-        message_text = tokens[1]
-        print(f"🔍 /handle_telegram: Extracted simp_id string: '{simp_id_str}', message_text: '{message_text}'", flush=True)
+        clean_message = tokens[1]
+        print(f"🔍 /handle_telegram: Extracted simp_id: '{simp_id_str}', clean message: '{clean_message}'", flush=True)
 
         try:
             simp_id = int(simp_id_str)
@@ -225,8 +234,8 @@ def create_app():
         phone = record[0]
         print(f"🔍 /handle_telegram: Retrieved phone number '{phone}' for simp_id: {simp_id}", flush=True)
 
-        # Build payload for Macrodroid including both the phone number and the message
-        payload = {"Phone": phone, "Message": message_text}
+        # Build payload for Macrodroid including the phone number and the cleaned message
+        payload = {"Phone": phone, "Message": clean_message}
         print(f"🔍 /handle_telegram: Forwarding payload: {payload}", flush=True)
         response = requests.post(MACROTRIGGER_URL, json=payload)
         print(f"✅ /handle_telegram: Macrodroid response: {response.text}", flush=True)
