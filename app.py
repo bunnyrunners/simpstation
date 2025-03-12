@@ -167,7 +167,7 @@ def create_app():
             print("❌ /handle_telegram: No message in update")
             return {"error": "No message found"}, 400
 
-        # Skip if message is from the bot
+        # Skip messages sent by the bot
         sender = message_obj.get("from", {})
         if sender.get("is_bot"):
             print("❌ /handle_telegram: Bot message ignored")
@@ -178,6 +178,7 @@ def create_app():
             print("❌ /handle_telegram: Format invalid")
             return {"error": "Invalid message format"}, 400
 
+        # Extract Simp_ID and message text
         parts = text.split("-", 1)
         simp_id_str = parts[0].strip()
         message_text = parts[1].strip()
@@ -201,12 +202,13 @@ def create_app():
             return {"error": "Simp_ID not found"}, 404
         phone = record[0]
 
-        # Forward the cleaned message to Macrodroid trigger
-        payload = {"phone": phone, "message": message_text}
+        # Build payload without the Simp_ID and hyphen, with correct key names.
+        payload = {"Phone": str(phone), "Message": message_text}
         print(f"🔍 /handle_telegram: Forwarding payload: {payload}")
         response = requests.post(MACROTRIGGER_URL, json=payload)
         print(f"✅ /handle_telegram: Macrodroid response: {response.text}")
         return {"status": "Message forwarded"}, 200
+
 
     return app
 
