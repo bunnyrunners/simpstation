@@ -1,4 +1,5 @@
 import os
+import re
 import psycopg2
 import requests
 from flask import Flask, request
@@ -40,7 +41,7 @@ def init_db():
                 simp_name TEXT NOT NULL,
                 status TEXT NOT NULL,
                 intent TEXT,
-                phone BIGINT UNIQUE NOT NULL,
+                phone TEXT UNIQUE NOT NULL,
                 duration INTEGER,
                 created DATE
             )
@@ -89,7 +90,7 @@ def sync_airtable_to_postgres():
                 fields.get("Simp"),
                 fields.get("Status"),
                 fields.get("🤝Intent"),
-                fields.get("Phone"),
+                fields.get("Phone"),  # This value will now be stored as text.
                 fields.get("Duration"),
                 fields.get("Created")
             ))
@@ -187,7 +188,7 @@ def create_app():
         text = message_obj.get("text", "")
         print(f"🔍 /handle_telegram: Raw text received: '{text}'")
 
-        # Use simple split: first token is the simp_id, the rest is the message.
+        # Split the message so that the first token is the simp_id and the rest is the message.
         tokens = text.strip().split(maxsplit=1)
         if len(tokens) < 2:
             print("❌ /handle_telegram: Message format invalid; not enough tokens.")
@@ -217,13 +218,13 @@ def create_app():
         cursor.close()
         conn.close()
         if not record:
-            print("❌ /handle_telegram: No record found for simp_id: ", simp_id)
+            print(f"❌ /handle_telegram: No record found for simp_id: {simp_id}")
             return {"error": "Simp_ID not found"}, 404
         phone = record[0]
         print(f"🔍 /handle_telegram: Retrieved phone number '{phone}' for simp_id: {simp_id}")
 
         # Build payload for Macrodroid and log it
-        payload = {"Phone": str(phone), "Message": message_text}
+        payload = {"Phone": phone, "Message": message_text}
         print(f"🔍 /handle_telegram: Forwarding payload: {payload}")
         response = requests.post(MACROTRIGGER_URL, json=payload)
         print(f"✅ /handle_telegram: Macrodroid response: {response.text}")
