@@ -102,5 +102,7 @@ def send_to_telegram(message):
     requests.post(url, json=payload)
 
 if __name__ == "__main__":
-    init_db()
+    print("Initializing database...")  # Log to confirm it runs
+    init_db()  # Ensure the database and table exist
     app.run(host="0.0.0.0", port=5000)
+
