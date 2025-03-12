@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import requests
 import json
@@ -13,17 +14,16 @@ TELEGRAM_CHAT_ID = "-1002184021600"
 # Flask App
 app = Flask(__name__)
 
-import os
-
-import os
-import sqlite3
-
-# Use Render's persistent disk at /data
+# Database Path (Persistent Storage in Render)
 DB_PATH = "/data/simps.db"
 
 def init_db():
     """Initialize SQLite database and sync data from Airtable"""
-    print(f"Using database file: {DB_PATH}")  # Debugging
+    print(f"Checking database at: {DB_PATH}")
+    
+    if not os.path.exists(DB_PATH):
+        print("Database file not found, creating a new one...")
+    
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -39,10 +39,8 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
-    sync_airtable_to_sqlite()  # Ensure data is populated
-
-
+    print("Database and table initialized successfully.")
+    sync_airtable_to_sqlite()
 
 def sync_airtable_to_sqlite():
     """Fetch data from Airtable and store it in SQLite."""
@@ -52,7 +50,7 @@ def sync_airtable_to_sqlite():
     
     if response.status_code == 200:
         records = response.json().get("records", [])
-        conn = sqlite3.connect("simps.db")
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM simps")  # Clear existing data
         for record in records:
@@ -84,13 +82,15 @@ def sync_airtable_to_sqlite():
 def receive_text():
     """Receive text from Macrodroid and send to Telegram."""
     data = request.json
+    print("Received request:", data)
+    
     phone_number = data.get("phone")
     text_message = data.get("message")
     
     if not phone_number or not text_message:
         return {"error": "Missing phone number or message"}, 400
     
-    conn = sqlite3.connect("simps.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT simp_id, simp_name FROM simps WHERE phone = ?", (phone_number,))
     simp = cursor.fetchone()
@@ -113,8 +113,18 @@ def send_to_telegram(message):
     }
     requests.post(url, json=payload)
 
+@app.route("/check_db", methods=["GET"])
+def check_db():
+    """Debugging route to check if the database exists and has tables."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
+    conn.close()
+    return {"tables": tables}
 
 if __name__ == "__main__":
-    print("Initializing database...")  # Log to confirm it runs
-    init_db()  # Ensure the database and table exist
-    app.run(host="0.0.0.0", port=5000)
+    print("Initializing database...")
+    init_db()
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=5000)
