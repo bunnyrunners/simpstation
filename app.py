@@ -1,23 +1,21 @@
 import os
 import psycopg2
 import requests
-import json
 from flask import Flask, request
 
 # Flask App
 app = Flask(__name__)
 
 # ✅ Load Environment Variables & Debug Print
-DATABASE_URL = os.getenv("DATABASE_URL")  # Fetch from Render environment variables
+DATABASE_URL = os.getenv("DATABASE_URL")  # Expected to be the PostgreSQL URL from Render
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-print(f"🔍 DEBUG: DATABASE_URL = {DATABASE_URL}")  # Log to see if Render is passing the DB URL
+print(f"🔍 DEBUG: DATABASE_URL = {DATABASE_URL}")
 
-# ✅ Debugging: Exit if DATABASE_URL is missing
 if not DATABASE_URL:
     raise Exception("❌ ERROR: DATABASE_URL is not set! Check Render Environment Variables.")
 
@@ -29,8 +27,8 @@ def get_db_connection():
         print("✅ SUCCESS: Connected to PostgreSQL!")
         return conn
     except Exception as e:
-        print(f"❌ ERROR: Database connection failed: {e}")  # Log error
-        return None  # Return None so we can debug further
+        print(f"❌ ERROR: Database connection failed: {e}")
+        return None
 
 def init_db():
     """Ensure the database and table exist before running queries."""
@@ -42,8 +40,6 @@ def init_db():
         return
 
     cursor = conn.cursor()
-
-    # ✅ Debugging SQL Execution
     try:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS simps (
@@ -60,7 +56,6 @@ def init_db():
         print("✅ SUCCESS: Database initialized!")
     except Exception as e:
         print(f"❌ ERROR: SQL Execution failed: {e}")
-    
     cursor.close()
     conn.close()
     
@@ -95,11 +90,11 @@ def sync_airtable_to_postgres():
                 INSERT INTO simps (simp_id, simp_name, status, intent, phone, duration, created)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (phone) DO UPDATE SET
-                simp_name = EXCLUDED.simp_name,
-                status = EXCLUDED.status,
-                intent = EXCLUDED.intent,
-                duration = EXCLUDED.duration,
-                created = EXCLUDED.created
+                    simp_name = EXCLUDED.simp_name,
+                    status = EXCLUDED.status,
+                    intent = EXCLUDED.intent,
+                    duration = EXCLUDED.duration,
+                    created = EXCLUDED.created
             """, (
                 fields.get("Simp_ID"),
                 fields.get("Simp"),
@@ -116,6 +111,11 @@ def sync_airtable_to_postgres():
     cursor.close()
     conn.close()
     print("✅ SUCCESS: Airtable data synced to PostgreSQL!")
+
+@app.before_first_request
+def startup():
+    """Initialize the database before handling the first request."""
+    init_db()
 
 @app.route("/receive_text", methods=["POST"])
 def receive_text():
@@ -178,4 +178,5 @@ def check_db():
 
 if __name__ == "__main__":
     print("🔍 DEBUG: Starting Flask app...")
-    init_db()
+    # When running with gunicorn (on Render) the __main__ block is bypassed.
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
