@@ -1,4 +1,5 @@
 import os
+import re
 import psycopg2
 import requests
 from flask import Flask, request
@@ -135,6 +136,7 @@ def create_app():
         if simp:
             simp_id, simp_name = simp
             formatted_message = f"{simp_id} | {simp_name} - {text_message}"
+            print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'")
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
         else:
@@ -174,18 +176,23 @@ def create_app():
             return {"status": "Ignored bot message"}, 200
 
         text = message_obj.get("text", "")
-        if "-" not in text:
-            print("❌ /handle_telegram: Format invalid")
+        print(f"🔍 /handle_telegram: Raw text: '{text}'")
+
+        # Use regex to extract Simp_ID and message text; allow for common dash variants (-, – or —)
+        pattern = r"^\s*(\d+)\s*[-–—]\s*(.+)$"
+        match = re.match(pattern, text)
+        if not match:
+            print("❌ /handle_telegram: Format invalid. Pattern did not match.")
             return {"error": "Invalid message format"}, 400
 
-        # Extract Simp_ID and message text
-        parts = text.split("-", 1)
-        simp_id_str = parts[0].strip()
-        message_text = parts[1].strip()
+        simp_id_str = match.group(1)
+        message_text = match.group(2)
+        print(f"🔍 /handle_telegram: Parsed simp_id: '{simp_id_str}', message_text: '{message_text}'")
+
         try:
             simp_id = int(simp_id_str)
         except ValueError:
-            print("❌ /handle_telegram: Simp_ID not integer")
+            print("❌ /handle_telegram: Simp_ID conversion error")
             return {"error": "Invalid Simp_ID"}, 400
 
         # Query DB for phone number using Simp_ID
@@ -198,17 +205,17 @@ def create_app():
         cursor.close()
         conn.close()
         if not record:
-            print("❌ /handle_telegram: Simp_ID not found")
+            print("❌ /handle_telegram: Simp_ID not found in DB")
             return {"error": "Simp_ID not found"}, 404
         phone = record[0]
+        print(f"🔍 /handle_telegram: Retrieved phone: '{phone}' for simp_id: {simp_id}")
 
-        # Build payload without the Simp_ID and hyphen, with correct key names.
+        # Build payload with proper keys and cleaned message text
         payload = {"Phone": str(phone), "Message": message_text}
         print(f"🔍 /handle_telegram: Forwarding payload: {payload}")
         response = requests.post(MACROTRIGGER_URL, json=payload)
         print(f"✅ /handle_telegram: Macrodroid response: {response.text}")
         return {"status": "Message forwarded"}, 200
-
 
     return app
 
