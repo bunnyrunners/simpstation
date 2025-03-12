@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import psycopg2
 import requests
 import json
 from flask import Flask, request
@@ -14,56 +14,61 @@ TELEGRAM_CHAT_ID = "-1002184021600"
 # Flask App
 app = Flask(__name__)
 
-# Database Path (Persistent Storage in Render)
-DB_PATH = "/data/simps.db"
+# PostgreSQL Connection URL (from Render)
+DATABASE_URL = os.getenv("DATABASE_URL")  # Set this in Render environment variables
+
+def get_db_connection():
+    """Connect to PostgreSQL database"""
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
 
 def init_db():
-    """Ensure the database file and table exist before running queries."""
-    print(f"Checking database at: {DB_PATH}")  # Debugging
+    """Ensure the database and table exist before running queries."""
+    print("Initializing PostgreSQL database...")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Force table creation on every startup
+    # Create the `simps` table if it doesn't exist
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS simps (
-            simp_id INTEGER PRIMARY KEY,
-            simp_name TEXT,
-            status TEXT,
+            simp_id SERIAL PRIMARY KEY,
+            simp_name TEXT NOT NULL,
+            status TEXT NOT NULL,
             intent TEXT,
-            phone INTEGER UNIQUE,
+            phone BIGINT UNIQUE NOT NULL,
             duration INTEGER,
             created DATE
         )
     """)
     conn.commit()
+    cursor.close()
     conn.close()
+    
+    print("Database initialized successfully.")
+    sync_airtable_to_postgres()
 
-    print("Database and table initialized successfully.")
-    sync_airtable_to_sqlite()  # Ensure Airtable sync happens
-
-def sync_airtable_to_sqlite():
-    """Fetch data from Airtable and store it in SQLite."""
+def sync_airtable_to_postgres():
+    """Fetch data from Airtable and store it in PostgreSQL."""
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     response = requests.get(url, headers=headers)
-    
+
     if response.status_code == 200:
         records = response.json().get("records", [])
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM simps")  # Clear existing data
         for record in records:
             fields = record.get("fields", {})
             cursor.execute("""
                 INSERT INTO simps (simp_id, simp_name, status, intent, phone, duration, created)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(phone) DO UPDATE SET
-                simp_name=excluded.simp_name,
-                status=excluded.status,
-                intent=excluded.intent,
-                duration=excluded.duration,
-                created=excluded.created
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (phone) DO UPDATE SET
+                simp_name = EXCLUDED.simp_name,
+                status = EXCLUDED.status,
+                intent = EXCLUDED.intent,
+                duration = EXCLUDED.duration,
+                created = EXCLUDED.created
             """, (
                 fields.get("Simp_ID"),
                 fields.get("Simp"),
@@ -74,7 +79,9 @@ def sync_airtable_to_sqlite():
                 fields.get("Created")
             ))
         conn.commit()
+        cursor.close()
         conn.close()
+        print("Airtable data synced successfully.")
     else:
         print("Failed to sync Airtable data")
 
@@ -83,19 +90,20 @@ def receive_text():
     """Receive text from Macrodroid and send to Telegram."""
     data = request.json
     print("Received request:", data)
-    
+
     phone_number = data.get("phone")
     text_message = data.get("message")
-    
+
     if not phone_number or not text_message:
         return {"error": "Missing phone number or message"}, 400
-    
-    conn = sqlite3.connect(DB_PATH)
+
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT simp_id, simp_name FROM simps WHERE phone = ?", (phone_number,))
+    cursor.execute("SELECT simp_id, simp_name FROM simps WHERE phone = %s", (phone_number,))
     simp = cursor.fetchone()
+    cursor.close()
     conn.close()
-    
+
     if simp:
         simp_id, simp_name = simp
         formatted_message = f"{simp_id} | {simp_name} - {text_message}"
@@ -116,10 +124,11 @@ def send_to_telegram(message):
 @app.route("/check_db", methods=["GET"])
 def check_db():
     """Debugging route to check if the database exists and has tables."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
     tables = cursor.fetchall()
+    cursor.close()
     conn.close()
     return {"tables": tables}
 
