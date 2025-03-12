@@ -4,18 +4,18 @@ import requests
 import json
 from flask import Flask, request
 
-# Constants
-AIRTABLE_API_KEY = "patPuTMAeNxOLZdfF.eae8fe1269153d6dffd899b697f8e4c43bab4981c95e0ada95afae69b6ffea40"
-AIRTABLE_BASE_ID = "appwzeZmxDEaLc2Cv"
-AIRTABLE_TABLE_NAME = "Simps"
-TELEGRAM_BOT_TOKEN = "7029812889:AAFinrJKT61P0qwl0NjWkM-R_pr4niTxEDE"
-TELEGRAM_CHAT_ID = "-1002184021600"
-
 # Flask App
 app = Flask(__name__)
 
-# PostgreSQL Connection URL (from Render)
-DATABASE_URL = os.getenv("DATABASE_URL")  # Set this in Render environment variables
+# Environment Variables (Set in Render)
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# PostgreSQL Connection URL (from Render Environment Variables)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
     """Connect to PostgreSQL database"""
@@ -49,6 +49,8 @@ def init_db():
 
 def sync_airtable_to_postgres():
     """Fetch data from Airtable and store it in PostgreSQL."""
+    print("Syncing Airtable data to PostgreSQL...")
+
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     response = requests.get(url, headers=headers)
@@ -83,7 +85,7 @@ def sync_airtable_to_postgres():
         conn.close()
         print("Airtable data synced successfully.")
     else:
-        print("Failed to sync Airtable data")
+        print("Failed to sync Airtable data:", response.text)
 
 @app.route("/receive_text", methods=["POST"])
 def receive_text():
@@ -135,5 +137,3 @@ def check_db():
 if __name__ == "__main__":
     print("Initializing database...")
     init_db()
-    from waitress import serve
-    serve(app, host="0.0.0.0", port=5000)
