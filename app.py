@@ -13,8 +13,13 @@ TELEGRAM_CHAT_ID = "-1002184021600"
 # Flask App
 app = Flask(__name__)
 
+import os
+
 def init_db():
     """Initialize SQLite database and sync data from Airtable"""
+    db_path = os.path.abspath("simps.db")
+    print(f"Using database file: {db_path}")  # Debugging
+
     conn = sqlite3.connect("simps.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -30,7 +35,9 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-    sync_airtable_to_sqlite()
+
+    sync_airtable_to_sqlite()  # Ensure data is populated
+
 
 def sync_airtable_to_sqlite():
     """Fetch data from Airtable and store it in SQLite."""
@@ -101,8 +108,8 @@ def send_to_telegram(message):
     }
     requests.post(url, json=payload)
 
+
 if __name__ == "__main__":
     print("Initializing database...")  # Log to confirm it runs
     init_db()  # Ensure the database and table exist
     app.run(host="0.0.0.0", port=5000)
-
