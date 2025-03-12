@@ -161,7 +161,6 @@ def create_app():
 
     @app.route("/handle_telegram", methods=["POST"])
     def handle_telegram():
-        # Process incoming Telegram update (non-bot message)
         update = request.json
         print(f"🔍 /handle_telegram: Update received: {update}")
         message_obj = update.get("message")
@@ -178,7 +177,7 @@ def create_app():
         text = message_obj.get("text", "")
         print(f"🔍 /handle_telegram: Raw text: '{text}'")
 
-        # Use regex to extract Simp_ID and message text; allow for common dash variants (-, – or —)
+        # Use regex to extract Simp_ID and message text; allow common dash variants (-, – or —)
         pattern = r"^\s*(\d+)\s*[-–—]\s*(.+)$"
         match = re.match(pattern, text)
         if not match:
@@ -200,8 +199,10 @@ def create_app():
         if not conn:
             return {"error": "DB connection failed"}, 500
         cursor = conn.cursor()
+        print(f"🔍 /handle_telegram: Executing query for simp_id: {simp_id}")
         cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id,))
         record = cursor.fetchone()
+        print(f"🔍 /handle_telegram: DB query result: {record}")
         cursor.close()
         conn.close()
         if not record:
