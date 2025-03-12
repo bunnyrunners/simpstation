@@ -112,10 +112,10 @@ def sync_airtable_to_postgres():
     conn.close()
     print("✅ SUCCESS: Airtable data synced to PostgreSQL!")
 
-@app.before_first_request
+@app.before_serving
 def startup():
-    """Initialize the database before handling the first request."""
     init_db()
+
 
 @app.route("/receive_text", methods=["POST"])
 def receive_text():
