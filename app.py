@@ -18,14 +18,13 @@ app = Flask(__name__)
 DB_PATH = "/data/simps.db"
 
 def init_db():
-    """Initialize SQLite database and sync data from Airtable"""
-    print(f"Checking database at: {DB_PATH}")
-    
-    if not os.path.exists(DB_PATH):
-        print("Database file not found, creating a new one...")
-    
+    """Ensure the database file and table exist before running queries."""
+    print(f"Checking database at: {DB_PATH}")  # Debugging
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+
+    # Force table creation on every startup
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS simps (
             simp_id INTEGER PRIMARY KEY,
@@ -39,8 +38,9 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+
     print("Database and table initialized successfully.")
-    sync_airtable_to_sqlite()
+    sync_airtable_to_sqlite()  # Ensure Airtable sync happens
 
 def sync_airtable_to_sqlite():
     """Fetch data from Airtable and store it in SQLite."""
