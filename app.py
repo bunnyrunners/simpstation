@@ -15,12 +15,16 @@ app = Flask(__name__)
 
 import os
 
+import os
+import sqlite3
+
+# Use Render's persistent disk at /data
+DB_PATH = "/data/simps.db"
+
 def init_db():
     """Initialize SQLite database and sync data from Airtable"""
-    db_path = os.path.abspath("simps.db")
-    print(f"Using database file: {db_path}")  # Debugging
-
-    conn = sqlite3.connect("simps.db")
+    print(f"Using database file: {DB_PATH}")  # Debugging
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS simps (
@@ -37,6 +41,7 @@ def init_db():
     conn.close()
 
     sync_airtable_to_sqlite()  # Ensure data is populated
+
 
 
 def sync_airtable_to_sqlite():
