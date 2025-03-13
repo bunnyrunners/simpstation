@@ -243,7 +243,7 @@ def create_app():
         if "photo" in message:
             print("🔍 /receive_telegram_message: Photo update detected.", flush=True)
             photo_array = message.get("photo")
-            file_id = photo_array[-1].get("file_id")
+            file_id = photo_array[0].get("file_id")
             get_file_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}"
             file_response = requests.get(get_file_url).json()
             file_path = file_response.get("result", {}).get("file_path")
