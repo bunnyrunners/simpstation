@@ -505,7 +505,7 @@ def create_app():
             emoji = select_emoji(subscription)
             cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
             # Final message excludes both simp_id and simp_name.
-            final_message = f"{emoji} {cleaned_message}"
+            final_message = f"{cleaned_message}"
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
             try:
