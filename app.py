@@ -129,8 +129,8 @@ def sync_airtable_to_postgres():
                 fields.get("Simp"),
                 fields.get("Status"),
                 fields.get("🤝Intent"),
-                str(fields.get("Phone")),  # Ensure TEXT storage.
-                sub_value,  # Subscription as a numeric value.
+                str(fields.get("Phone")),
+                sub_value,
                 fields.get("Duration"),
                 fields.get("Created")
             ))
@@ -256,8 +256,8 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If the command is /fetchsimps, fetch all records.
-        if text_message.strip() == "/fetchsimps":
+        # Check if the text contains the command /fetchsimps.
+        if "/fetchsimps" in text_message:
             print("🔍 /receive_telegram_message: /fetchsimps command detected.", flush=True)
             conn = get_db_connection()
             if not conn:
@@ -307,6 +307,7 @@ def create_app():
             cursor.execute("SELECT phone, subscription, simp_name FROM simps WHERE simp_id = %s", (simp_id_int,))
             record = cursor.fetchone()
         except Exception as e:
+            print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
             cursor.close()
             conn.close()
             return {"error": "DB query failed"}, 200
@@ -323,6 +324,7 @@ def create_app():
                 response = requests.post(MACROTRIGGER_URL, json=payload)
                 print(f"🔍 /receive_telegram_message: Sent payload, response: {response.text}", flush=True)
             except Exception as e:
+                print(f"❌ /receive_telegram_message: Error sending payload to Macrodroid: {e}", flush=True)
                 return {"error": "Failed to send to Macrodroid"}, 200
             return {"status": "Trigger sent"}, 200
         else:
