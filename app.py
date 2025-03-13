@@ -118,6 +118,33 @@ def sync_airtable_to_postgres():
     print("✅ Sync: Airtable sync complete!", flush=True)
 
 
+def select_emoji(subscription):
+    """
+    Returns an emoji based on the subscription value.
+    """
+    if subscription is None:
+        return "❓"  # Unknown subscription value
+    try:
+        sub = float(subscription)
+    except (ValueError, TypeError):
+        return "❓"
+    
+    if sub >= 92:
+        return "😍"
+    elif sub >= 62:
+        return "😀"
+    elif sub >= 37:
+        return "🙂"
+    elif sub >= 18:
+        return "😐"
+    elif sub > 0:
+        return "😨"
+    elif sub == 0:
+        return "💀"
+    else:
+        return "❓"
+
+
 def send_to_telegram(message):
     print(f"🔍 Telegram: Sending message to Telegram: '{message}'", flush=True)
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -152,7 +179,7 @@ def create_app():
             return {"error": "DB connection failed"}, 500
         cursor = conn.cursor()
         print(f"🔍 /receive_text: Querying DB for phone: {phone_number}", flush=True)
-        # Now also retrieve the subscription field.
+        # Also retrieve subscription.
         cursor.execute("SELECT simp_id, simp_name, subscription FROM simps WHERE phone = %s", (phone_number,))
         simp = cursor.fetchone()
         print(f"🔍 /receive_text: DB query result: {simp}", flush=True)
@@ -160,7 +187,7 @@ def create_app():
         conn.close()
         if simp:
             simp_id, simp_name, subscription = simp
-            emoji = "✅" if subscription is not None and subscription > 28 else "⚠️"
+            emoji = select_emoji(subscription)
             formatted_message = f"{emoji} {simp_id} | {simp_name}: {text_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
@@ -222,8 +249,8 @@ def create_app():
 
         print(f"🔍 /receive_telegram_message: Extracted simp_id: {simp_id_int}", flush=True)
 
-        # Query the DB for a record with simp_id equal to simp_id_int,
-        # and also retrieve subscription and simp_name.
+        # Query the DB for a record with simp_id equal to simp_id_int.
+        # Also retrieve subscription and simp_name.
         conn = get_db_connection()
         if not conn:
             print("❌ /receive_telegram_message: DB connection failed.", flush=True)
@@ -242,7 +269,7 @@ def create_app():
         conn.close()
         if record:
             phone, subscription, simp_name = record
-            emoji = "✅" if subscription is not None and subscription > 28 else "⚠️"
+            emoji = select_emoji(subscription)
             # Remove the leading simp_id from the text.
             cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
             final_message = f"{emoji} {simp_id_int} | {simp_name}: {cleaned_message}"
