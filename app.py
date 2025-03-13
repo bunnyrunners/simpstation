@@ -22,7 +22,7 @@ processed_updates = set()
 # Global flag to indicate diary mode is active.
 pending_diary = False
 
-# Diary responses array
+# Diary responses array.
 diary_responses = [
     "Love it! ❤️",
     "Dang, okay! 😳",
@@ -122,9 +122,9 @@ def init_db():
         conn.commit()
         print("✅ DB: Ensured 'subscription' column exists.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'subscription' column: {e}", flush=True)
+        print(f"⚠️ DB: Could not alter 'subscription' column (it might already exist): {e}", flush=True)
     
-    # Add the notes column if it doesn't exist.
+    # Add the new notes column if it doesn't exist.
     try:
         cursor.execute("""
             ALTER TABLE simps
@@ -133,7 +133,7 @@ def init_db():
         conn.commit()
         print("✅ DB: Ensured 'notes' column exists.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'notes' column: {e}", flush=True)
+        print(f"⚠️ DB: Could not alter 'notes' column (it might already exist): {e}", flush=True)
     
     # Ensure the phone column is stored as TEXT.
     try:
@@ -201,8 +201,8 @@ def sync_airtable_to_postgres():
                 fields.get("Simp"),
                 fields.get("Status"),
                 fields.get("🤝Intent"),
-                str(fields.get("Phone")),
-                sub_value,
+                str(fields.get("Phone")),  # Ensure TEXT storage.
+                sub_value,  # Subscription as a numeric value.
                 fields.get("Duration"),
                 fields.get("Created"),
                 notes
@@ -330,7 +330,7 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If the message contains "/diary", trigger diary mode.
+        # Check if the message contains "/diary". If so, trigger diary mode.
         if "/diary" in text_message:
             print("🔍 /receive_telegram_message: /diary command detected.", flush=True)
             send_to_telegram("📔When you're ready, leave a note on a simp. (e.g \"8 loves when I call him daddy\")")
@@ -339,6 +339,7 @@ def create_app():
 
         # If diary mode is pending, process the diary update.
         if pending_diary:
+            # Expect a diary update message in the format: "<simp_id> <note text>"
             numbers = re.findall(r'\d+', text_message)
             if not numbers:
                 print("❌ /receive_telegram_message: No simp_id found in diary update.", flush=True)
@@ -349,7 +350,9 @@ def create_app():
             except ValueError as e:
                 print(f"❌ /receive_telegram_message: Error converting simp_id in diary update: {e}", flush=True)
                 return {"error": "Invalid simp_id in diary update"}, 200
+            # Remove the simp_id from the text to get the note.
             note_text = re.sub(r'^\s*\d+\s*', '', text_message)
+            # Update the Notes field in the database.
             conn = get_db_connection()
             if not conn:
                 return {"error": "DB connection failed"}, 200
@@ -365,9 +368,27 @@ def create_app():
                 return {"error": "DB update failed"}, 200
             cursor.close()
             conn.close()
-            # Choose a random diary response.
-            response_text = random.choice(diary_responses)
-            send_to_telegram(f"{response_text} Updated {simp_id_int} successfully.")
+            # Now, fetch the simp_name for confirmation.
+            conn = get_db_connection()
+            if not conn:
+                return {"error": "DB connection failed"}, 200
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT simp_name FROM simps WHERE simp_id = %s", (simp_id_int,))
+                record = cursor.fetchone()
+            except Exception as e:
+                cursor.close()
+                conn.close()
+                print(f"❌ /receive_telegram_message: DB query error for diary confirmation: {e}", flush=True)
+                return {"error": "DB query failed"}, 200
+            cursor.close()
+            conn.close()
+            simp_name = record[0] if record else "Unknown"
+            # Pick a random diary response.
+            random_response = random.choice(diary_responses)
+            confirmation_message = f"{random_response} Updated {simp_name} successfully."
+            print(f"🔍 /receive_telegram_message: Diary update confirmation: {confirmation_message}", flush=True)
+            send_to_telegram(confirmation_message)
             pending_diary = False
             return {"status": "Diary note updated"}, 200
 
@@ -379,6 +400,7 @@ def create_app():
                 return {"error": "DB connection failed"}, 200
             cursor = conn.cursor()
             try:
+                # Order by simp_id DESC so the highest simp_id is first.
                 cursor.execute("SELECT simp_id, simp_name, intent, subscription, duration FROM simps ORDER BY simp_id DESC")
                 records = cursor.fetchall()
             except Exception as e:
