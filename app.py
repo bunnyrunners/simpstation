@@ -15,7 +15,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Macrodroid trigger URL for replies
 MACROTRIGGER_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f/reply"
 
-# In-memory store for processed Telegram update IDs (to avoid duplicates)
+# In-memory store for processed Telegram update IDs (to avoid duplicate processing)
 processed_updates = set()
 
 
@@ -104,12 +104,10 @@ def sync_airtable_to_postgres():
         sub_value = None
         if sub_raw is not None:
             try:
-                # If it's a string, remove "%" and whitespace.
                 if isinstance(sub_raw, str):
                     sub_value = float(sub_raw.replace("%", "").strip())
                 else:
                     sub_value = float(sub_raw)
-                # If the value seems to be a fraction (<= 1), assume it's a percentage fraction and multiply by 100.
                 if sub_value <= 1:
                     sub_value *= 100
             except Exception as e:
@@ -150,7 +148,7 @@ def select_emoji(subscription):
     Returns an emoji based on the subscription value.
     """
     if subscription is None:
-        return "❓"  # Unknown subscription value
+        return "❓"
     try:
         sub = float(subscription)
     except (ValueError, TypeError):
@@ -231,6 +229,8 @@ def create_app():
             tables = cursor.fetchall()
             print(f"🔍 /check_db: Retrieved tables: {tables}", flush=True)
         except Exception as e:
+            cursor.close()
+            conn.close()
             return {"error": "DB query failed"}, 500
         cursor.close()
         conn.close()
@@ -245,43 +245,18 @@ def create_app():
         # Track processed update IDs to prevent duplicate processing.
         update_id = update.get("update_id")
         if update_id in processed_updates:
-            print(f"🔍 /receive_telegram_message: Duplicate update received: {update_id}. Ignoring.", flush=True)
+            print(f"🔍 Duplicate update {update_id} received. Ignoring.", flush=True)
             return {"status": "OK"}, 200
         else:
             processed_updates.add(update_id)
         
         message = update.get("message", {})
-        
-        # If the message contains a photo, process it.
-        if "photo" in message:
-            print("🔍 /receive_telegram_message: Photo update detected.", flush=True)
-            photo_array = message.get("photo")
-            # Choose the smallest photo version (to reduce file size).
-            file_id = photo_array[0].get("file_id")
-            get_file_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}"
-            file_response = requests.get(get_file_url).json()
-            file_path = file_response.get("result", {}).get("file_path")
-            if not file_path:
-                print("❌ /receive_telegram_message: Could not retrieve file path.", flush=True)
-                return {"error": "Could not retrieve file path"}, 200
-            download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-            photo_data = requests.get(download_url).content
-            files = {"photo": ("photo.jpg", photo_data, "image/jpeg")}
-            try:
-                response = requests.post(MACROTRIGGER_URL, files=files)
-                print(f"🔍 /receive_telegram_message: Photo sent to Macrodroid, response: {response.text}", flush=True)
-            except Exception as e:
-                print(f"❌ /receive_telegram_message: Error sending photo payload: {e}", flush=True)
-                return {"error": "Failed to send photo to Macrodroid"}, 200
-            return {"status": "Photo trigger sent"}, 200
-        
-        # Otherwise, process as text.
         text_message = message.get("text")
         if not text_message:
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If the message is the command to fetch all simps.
+        # If the command is /fetchsimps, fetch all records.
         if text_message.strip() == "/fetchsimps":
             print("🔍 /receive_telegram_message: /fetchsimps command detected.", flush=True)
             conn = get_db_connection()
@@ -294,27 +269,24 @@ def create_app():
             except Exception as e:
                 cursor.close()
                 conn.close()
-                print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
                 return {"error": "DB query failed"}, 200
             cursor.close()
             conn.close()
-            if records:
+            if not records:
+                reply_message = "No simps found."
+            else:
                 lines = []
                 for rec in records:
                     simp_id, simp_name, intent, subscription, duration = rec
                     emoji = select_emoji(subscription)
                     line = f"{emoji} {simp_id} | {simp_name} | intent: {intent} | Duration: {duration}"
                     lines.append(line)
-                final_list = "\n".join(lines)
-                print(f"🔍 /receive_telegram_message: Sending fetched simps list:\n{final_list}", flush=True)
-                send_to_telegram(final_list)
-                return {"status": "Fetched simps sent"}, 200
-            else:
-                print("🔍 /receive_telegram_message: No simps found in DB.", flush=True)
-                send_to_telegram("No simps found.")
-                return {"status": "No simps found"}, 200
+                reply_message = "\n".join(lines)
+            print(f"🔍 /receive_telegram_message: Sending fetchsimps reply:\n{reply_message}", flush=True)
+            send_to_telegram(reply_message)
+            return {"status": "Fetchsimps trigger sent"}, 200
 
-        # Process normal text messages.
+        # Process as a regular text message.
         numbers = re.findall(r'\d+', text_message)
         if not numbers:
             print("❌ /receive_telegram_message: No numbers found in the message.", flush=True)
@@ -335,7 +307,6 @@ def create_app():
             cursor.execute("SELECT phone, subscription, simp_name FROM simps WHERE simp_id = %s", (simp_id_int,))
             record = cursor.fetchone()
         except Exception as e:
-            print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
             cursor.close()
             conn.close()
             return {"error": "DB query failed"}, 200
@@ -352,22 +323,10 @@ def create_app():
                 response = requests.post(MACROTRIGGER_URL, json=payload)
                 print(f"🔍 /receive_telegram_message: Sent payload, response: {response.text}", flush=True)
             except Exception as e:
-                print(f"❌ /receive_telegram_message: Error sending payload to Macrodroid: {e}", flush=True)
                 return {"error": "Failed to send to Macrodroid"}, 200
             return {"status": "Trigger sent"}, 200
         else:
-            print("❌ /receive_telegram_message: No record found with that simp_id.", flush=True)
             return {"error": "No record found for simp_id"}, 200
-
-    @app.route("/receive_photo", methods=["POST"])
-    def receive_photo():
-        if 'photo' not in request.files:
-            return {"error": "No photo provided"}, 400
-        photo = request.files['photo']
-        photo_path = "uploaded_photo.jpg"
-        photo.save(photo_path)
-        print(f"🔍 /receive_photo: Photo saved to {photo_path}", flush=True)
-        return {"status": "Photo received"}, 200
 
     return app
 
