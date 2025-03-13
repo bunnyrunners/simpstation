@@ -19,7 +19,7 @@ MACROTRIGGER_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d146
 # In-memory store for processed Telegram update IDs (to avoid duplicate processing)
 processed_updates = set()
 
-# Global flag to indicate diary mode is active.
+# Global flag for diary update mode (triggered by /note command)
 pending_diary = False
 
 # Diary responses array.
@@ -122,7 +122,7 @@ def init_db():
         conn.commit()
         print("✅ DB: Ensured 'subscription' column exists.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'subscription' column (it might already exist): {e}", flush=True)
+        print(f"⚠️ DB: Could not alter 'subscription' column: {e}", flush=True)
     
     # Add the new notes column if it doesn't exist.
     try:
@@ -133,7 +133,7 @@ def init_db():
         conn.commit()
         print("✅ DB: Ensured 'notes' column exists.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'notes' column (it might already exist): {e}", flush=True)
+        print(f"⚠️ DB: Could not alter 'notes' column: {e}", flush=True)
     
     # Ensure the phone column is stored as TEXT.
     try:
@@ -221,7 +221,7 @@ def select_emoji(subscription):
     Returns an emoji based on the subscription value.
     """
     if subscription is None:
-        return "❓"  # Unknown subscription value
+        return "❓"
     try:
         sub = float(subscription)
     except (ValueError, TypeError):
@@ -330,14 +330,45 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If the message contains "/diary", trigger diary mode.
+        # If the message contains "/diary", fetch all records and reply with diary notes.
         if "/diary" in text_message:
             print("🔍 /receive_telegram_message: /diary command detected.", flush=True)
-            send_to_telegram("📔When you're ready, leave a note on a simp. (e.g \"8 loves when I call him daddy\")")
-            pending_diary = True
-            return {"status": "Diary mode activated"}, 200
+            conn = get_db_connection()
+            if not conn:
+                return {"error": "DB connection failed"}, 200
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT simp_id, simp_name, notes, subscription FROM simps ORDER BY simp_id DESC")
+                records = cursor.fetchall()
+            except Exception as e:
+                cursor.close()
+                conn.close()
+                return {"error": "DB query failed"}, 200
+            cursor.close()
+            conn.close()
+            if not records:
+                reply_message = "No diary notes found."
+            else:
+                lines = []
+                for rec in records:
+                    simp_id, simp_name, notes, subscription = rec
+                    emoji = select_emoji(subscription)
+                    note_field = notes if notes else "No note"
+                    line = f"{emoji} {simp_id} | {simp_name} | 📔 {note_field}"
+                    lines.append(line)
+                reply_message = "\n".join(lines)
+            print(f"🔍 /receive_telegram_message: Sending diary reply:\n{reply_message}", flush=True)
+            send_to_telegram(reply_message)
+            return {"status": "Diary reply sent"}, 200
 
-        # If diary mode is pending, process the diary update.
+        # If the message contains "/note", trigger diary update mode.
+        if "/note" in text_message:
+            print("🔍 /receive_telegram_message: /note command detected.", flush=True)
+            send_to_telegram("📔When ready, leave your note. (e.g. \"8 loves when I call him papi\")")
+            pending_diary = True
+            return {"status": "Diary update mode activated"}, 200
+
+        # If diary update mode is pending, process the diary update.
         if pending_diary:
             numbers = re.findall(r'\d+', text_message)
             if not numbers:
@@ -347,7 +378,7 @@ def create_app():
             try:
                 simp_id_int = int(simp_id_str)
             except ValueError as e:
-                print(f"❌ /receive_telegram_message: Error converting simp_id to integer in diary update: {e}", flush=True)
+                print(f"❌ /receive_telegram_message: Error converting simp_id in diary update: {e}", flush=True)
                 return {"error": "Invalid simp_id in diary update"}, 200
             note_text = re.sub(r'^\s*\d+\s*', '', text_message)
             conn = get_db_connection()
@@ -361,7 +392,7 @@ def create_app():
             except Exception as e:
                 cursor.close()
                 conn.close()
-                print(f"❌ /receive_telegram_message: DB update error in diary mode: {e}", flush=True)
+                print(f"❌ /receive_telegram_message: DB update error in diary update: {e}", flush=True)
                 return {"error": "DB update failed"}, 200
             cursor.close()
             conn.close()
@@ -384,7 +415,7 @@ def create_app():
             pending_diary = False
             return {"status": "Diary note updated"}, 200
 
-        # If the message contains "/fetchsimps", fetch and list all records.
+        # If the message contains "/fetchsimps", fetch and list all records (excluding diary notes).
         if "/fetchsimps" in text_message:
             print("🔍 /receive_telegram_message: /fetchsimps command detected.", flush=True)
             conn = get_db_connection()
@@ -392,8 +423,7 @@ def create_app():
                 return {"error": "DB connection failed"}, 200
             cursor = conn.cursor()
             try:
-                # Order by simp_id DESC so the highest simp_id is first.
-                cursor.execute("SELECT simp_id, simp_name, intent, subscription, duration, notes FROM simps ORDER BY simp_id DESC")
+                cursor.execute("SELECT simp_id, simp_name, intent, subscription, duration FROM simps ORDER BY simp_id DESC")
                 records = cursor.fetchall()
             except Exception as e:
                 cursor.close()
@@ -406,9 +436,9 @@ def create_app():
             else:
                 lines = []
                 for rec in records:
-                    simp_id, simp_name, intent, subscription, duration, notes = rec
+                    simp_id, simp_name, intent, subscription, duration = rec
                     emoji = select_emoji(subscription)
-                    line = f"{emoji} {simp_id} | {simp_name} | 💗 {intent} | 📔 {notes} | ⌛ {duration} days"
+                    line = f"{emoji} {simp_id} | {simp_name} | 💗 {intent} | ⌛ {duration} days"
                     lines.append(line)
                 reply_message = "\n".join(lines)
             print(f"🔍 /receive_telegram_message: Sending fetchsimps reply:\n{reply_message}", flush=True)
@@ -424,7 +454,7 @@ def create_app():
         try:
             simp_id_int = int(simp_id_str)
         except ValueError as e:
-            print(f"❌ /receive_telegram_message: Error converting simp_id to integer: {e}", flush=True)
+            print(f"❌ /receive_telegram_message: Error converting simp_id: {e}", flush=True)
             return {"error": "Invalid simp_id"}, 200
 
         print(f"🔍 /receive_telegram_message: Extracted simp_id: {simp_id_int}", flush=True)
