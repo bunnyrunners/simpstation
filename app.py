@@ -1,5 +1,6 @@
 import os
 import re
+import random
 import psycopg2
 import requests
 from flask import Flask, request
@@ -18,8 +19,62 @@ MACROTRIGGER_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d146
 # In-memory store for processed Telegram update IDs (to avoid duplicate processing)
 processed_updates = set()
 
-# Global flag to indicate that a diary update is pending.
+# Global flag to indicate diary mode is active.
 pending_diary = False
+
+# Diary responses array
+diary_responses = [
+    "Love it! ❤️",
+    "Dang, okay! 😳",
+    "No way! 🤯",
+    "That’s wild! 🌪️",
+    "I’m in! ✅",
+    "For real? 👀",
+    "Oh wow! 😲",
+    "Nice one! 👍",
+    "Big yes! 🔥",
+    "Well, damn. 😏",
+    "Respect. 🙌",
+    "Not bad! 😎",
+    "Let’s go! 🚀",
+    "That’s insane! 🤪",
+    "You got it. 💪",
+    "Sounds good. 🎵",
+    "Oh heck! 😮",
+    "Whoa, okay! 😵‍💫",
+    "True that. 📜",
+    "Oh snap! 📸",
+    "Can’t lie! 🤥",
+    "That’s crazy. 🌀",
+    "Say less. 🤫",
+    "Alright then! 🤷‍♂️",
+    "Big mood. 🎭",
+    "Sheesh! 🥶",
+    "Wild stuff! 🦁",
+    "Love that! 💖",
+    "I’m shook. 🌊",
+    "Facts. 🔎",
+    "Big vibes! ✨",
+    "Bet. 🎲",
+    "Oh shoot! 🎯",
+    "So true. ✅",
+    "Good call! 📞",
+    "Absolutely! 💯",
+    "I see! 👁️",
+    "That’s deep. 🌊",
+    "Wow, okay. 😮‍💨",
+    "Makes sense. 🤓",
+    "That tracks. 🚆",
+    "No doubt. 🤝",
+    "I feel that. 🎶",
+    "Well, alright! 🤠",
+    "That’s cool. ❄️",
+    "Big energy! ⚡",
+    "Say what? 🤨",
+    "Go off! 🔥",
+    "So be it. 🕊️",
+    "Okay then! 🤔"
+]
 
 
 def get_db_connection():
@@ -67,9 +122,9 @@ def init_db():
         conn.commit()
         print("✅ DB: Ensured 'subscription' column exists.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'subscription' column (it might already exist): {e}", flush=True)
+        print(f"⚠️ DB: Could not alter 'subscription' column: {e}", flush=True)
     
-    # Add the new notes column if it doesn't exist.
+    # Add the notes column if it doesn't exist.
     try:
         cursor.execute("""
             ALTER TABLE simps
@@ -78,7 +133,7 @@ def init_db():
         conn.commit()
         print("✅ DB: Ensured 'notes' column exists.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'notes' column (it might already exist): {e}", flush=True)
+        print(f"⚠️ DB: Could not alter 'notes' column: {e}", flush=True)
     
     # Ensure the phone column is stored as TEXT.
     try:
@@ -166,7 +221,7 @@ def select_emoji(subscription):
     Returns an emoji based on the subscription value.
     """
     if subscription is None:
-        return "❓"  # Unknown subscription value
+        return "❓"
     try:
         sub = float(subscription)
     except (ValueError, TypeError):
@@ -275,7 +330,7 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If the message contains "/diary", trigger the diary mode.
+        # If the message contains "/diary", trigger diary mode.
         if "/diary" in text_message:
             print("🔍 /receive_telegram_message: /diary command detected.", flush=True)
             send_to_telegram("📔When you're ready, leave a note on a simp. (e.g \"8 loves when I call him daddy\")")
@@ -284,7 +339,6 @@ def create_app():
 
         # If diary mode is pending, process the diary update.
         if pending_diary:
-            # Expect a diary update message in the format: "<simp_id> <note text>"
             numbers = re.findall(r'\d+', text_message)
             if not numbers:
                 print("❌ /receive_telegram_message: No simp_id found in diary update.", flush=True)
@@ -293,11 +347,9 @@ def create_app():
             try:
                 simp_id_int = int(simp_id_str)
             except ValueError as e:
-                print(f"❌ /receive_telegram_message: Error converting simp_id to integer in diary update: {e}", flush=True)
+                print(f"❌ /receive_telegram_message: Error converting simp_id in diary update: {e}", flush=True)
                 return {"error": "Invalid simp_id in diary update"}, 200
-            # Remove the simp_id from the text to get the note.
             note_text = re.sub(r'^\s*\d+\s*', '', text_message)
-            # Update the Notes field in the database.
             conn = get_db_connection()
             if not conn:
                 return {"error": "DB connection failed"}, 200
@@ -313,7 +365,9 @@ def create_app():
                 return {"error": "DB update failed"}, 200
             cursor.close()
             conn.close()
-            send_to_telegram(f"Diary note updated for simp_id {simp_id_int}.")
+            # Choose a random diary response.
+            response_text = random.choice(diary_responses)
+            send_to_telegram(f"{response_text} Updated {simp_id_int} successfully.")
             pending_diary = False
             return {"status": "Diary note updated"}, 200
 
@@ -325,7 +379,6 @@ def create_app():
                 return {"error": "DB connection failed"}, 200
             cursor = conn.cursor()
             try:
-                # Order by simp_id DESC so the highest simp_id is first.
                 cursor.execute("SELECT simp_id, simp_name, intent, subscription, duration FROM simps ORDER BY simp_id DESC")
                 records = cursor.fetchall()
             except Exception as e:
