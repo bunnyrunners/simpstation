@@ -395,7 +395,7 @@ def create_app():
         # If the message contains "/note", trigger diary update mode.
         if "/note" in text_message:
             print("🔍 /receive_telegram_message: /note command detected.", flush=True)
-            send_to_telegram("✍🏼When ready, leave a note. (e.g. \"8 Gets paid on Thursdays\")")
+            send_to_telegram("✍🏼When ready, leave a note. (e.g. \"8 gets paid on thursdays\")")
             pending_diary = True
             return {"status": "Diary update mode activated"}, 200
 
