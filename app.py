@@ -353,7 +353,7 @@ def create_app():
                 for rec in records:
                     simp_id, simp_name, notes, subscription = rec
                     emoji = select_emoji(subscription)
-                    note_field = notes if notes else "No note"
+                    note_field = notes if notes else "((empty))"
                     line = f"{emoji} {simp_id} | {simp_name} | 📔 {note_field}"
                     lines.append(line)
                 reply_message = "\n".join(lines)
