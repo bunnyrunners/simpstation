@@ -38,6 +38,7 @@ def init_db():
         return
     cursor = conn.cursor()
     try:
+        # Create the table if it doesn't exist.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS simps (
                 simp_id SERIAL PRIMARY KEY,
@@ -54,13 +55,24 @@ def init_db():
     except Exception as e:
         print(f"❌ DB: Error during DB initialization: {e}", flush=True)
     
-    # Force the phone column to be TEXT even if table existed before
+    # Add the subscription column if it doesn't exist.
+    try:
+        cursor.execute("""
+            ALTER TABLE simps
+            ADD COLUMN IF NOT EXISTS subscription NUMERIC
+        """)
+        conn.commit()
+        print("✅ DB: Ensured 'subscription' column exists.", flush=True)
+    except Exception as e:
+        print(f"⚠️ DB: Could not alter 'subscription' column (it might already exist): {e}", flush=True)
+    
+    # Ensure the phone column is stored as TEXT.
     try:
         cursor.execute("ALTER TABLE simps ALTER COLUMN phone TYPE TEXT USING phone::text;")
         conn.commit()
         print("✅ DB: Ensured 'phone' column is TEXT.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'phone' column to TEXT (it might already be TEXT): {e}", flush=True)
+        print(f"⚠️ DB: Could not alter 'phone' column to TEXT: {e}", flush=True)
     
     cursor.close()
     conn.close()
@@ -87,14 +99,31 @@ def sync_airtable_to_postgres():
     cursor.execute("DELETE FROM simps")
     for record in records:
         fields = record.get("fields", {})
+        # Process the Subscription field from the formula.
+        sub_raw = fields.get("Subscription")
+        sub_value = None
+        if sub_raw is not None:
+            try:
+                # If it's a string, remove any "%" and whitespace.
+                if isinstance(sub_raw, str):
+                    sub_value = float(sub_raw.replace("%", "").strip())
+                else:
+                    sub_value = float(sub_raw)
+                # If the value seems to be a fraction (<= 1), assume it's a percentage fraction and multiply by 100.
+                if sub_value <= 1:
+                    sub_value *= 100
+            except Exception as e:
+                print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
+                sub_value = None
         try:
             cursor.execute("""
-                INSERT INTO simps (simp_id, simp_name, status, intent, phone, duration, created)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO simps (simp_id, simp_name, status, intent, phone, subscription, duration, created)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (phone) DO UPDATE SET
                     simp_name = EXCLUDED.simp_name,
                     status = EXCLUDED.status,
                     intent = EXCLUDED.intent,
+                    subscription = EXCLUDED.subscription,
                     duration = EXCLUDED.duration,
                     created = EXCLUDED.created
             """, (
@@ -102,7 +131,8 @@ def sync_airtable_to_postgres():
                 fields.get("Simp"),
                 fields.get("Status"),
                 fields.get("🤝Intent"),
-                str(fields.get("Phone")),  # Cast to string to ensure TEXT storage.
+                str(fields.get("Phone")),  # Ensure TEXT storage.
+                sub_value,  # Subscription as a numeric value.
                 fields.get("Duration"),
                 fields.get("Created")
             ))
@@ -113,6 +143,33 @@ def sync_airtable_to_postgres():
     cursor.close()
     conn.close()
     print("✅ Sync: Airtable sync complete!", flush=True)
+
+
+def select_emoji(subscription):
+    """
+    Returns an emoji based on the subscription value.
+    """
+    if subscription is None:
+        return "❓"  # Unknown subscription value
+    try:
+        sub = float(subscription)
+    except (ValueError, TypeError):
+        return "❓"
+    
+    if sub >= 92:
+        return "😍"
+    elif sub >= 62:
+        return "😀"
+    elif sub >= 37:
+        return "🙂"
+    elif sub >= 18:
+        return "😐"
+    elif sub > 0:
+        return "😨"
+    elif sub == 0:
+        return "💀"
+    else:
+        return "❓"
 
 
 def send_to_telegram(message):
@@ -149,14 +206,15 @@ def create_app():
             return {"error": "DB connection failed"}, 500
         cursor = conn.cursor()
         print(f"🔍 /receive_text: Querying DB for phone: {phone_number}", flush=True)
-        cursor.execute("SELECT simp_id, simp_name FROM simps WHERE phone = %s", (phone_number,))
+        cursor.execute("SELECT simp_id, simp_name, subscription FROM simps WHERE phone = %s", (phone_number,))
         simp = cursor.fetchone()
         print(f"🔍 /receive_text: DB query result: {simp}", flush=True)
         cursor.close()
         conn.close()
         if simp:
-            simp_id, simp_name = simp
-            formatted_message = f"{simp_id} | {simp_name} - {text_message}"
+            simp_id, simp_name, subscription = simp
+            emoji = select_emoji(subscription)
+            formatted_message = f"{emoji} {simp_id} | {simp_name}: {text_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -218,6 +276,7 @@ def create_app():
         print(f"🔍 /receive_telegram_message: Extracted simp_id: {simp_id_int}", flush=True)
 
         # Query the DB for a record with simp_id equal to simp_id_int.
+        # Also retrieve subscription and simp_name.
         conn = get_db_connection()
         if not conn:
             print("❌ /receive_telegram_message: DB connection failed.", flush=True)
@@ -225,7 +284,7 @@ def create_app():
         cursor = conn.cursor()
         print(f"🔍 /receive_telegram_message: Querying DB for simp_id: {simp_id_int}", flush=True)
         try:
-            cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id_int,))
+            cursor.execute("SELECT phone, subscription, simp_name FROM simps WHERE simp_id = %s", (simp_id_int,))
             record = cursor.fetchone()
         except Exception as e:
             print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
@@ -235,15 +294,13 @@ def create_app():
         cursor.close()
         conn.close()
         if record:
-            phone = record[0]
-            print(f"🔍 /receive_telegram_message: Found phone: {phone} for simp_id: {simp_id_int}", flush=True)
-            
-            # Remove the leading simp_id from the message.
-            # This regex removes any leading digits and surrounding whitespace.
+            phone, subscription, simp_name = record
+            emoji = select_emoji(subscription)
+            # Remove the leading simp_id from the text.
             cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
-            
-            payload = {"phone": phone, "message": cleaned_message}
-            print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {payload}", flush=True)
+            final_message = f"{emoji} {simp_id_int} | {simp_name}: {cleaned_message}"
+            print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
+            payload = {"phone": phone, "message": final_message}
             try:
                 response = requests.post(MACROTRIGGER_URL, json=payload)
                 print(f"🔍 /receive_telegram_message: Sent payload, response: {response.text}", flush=True)
