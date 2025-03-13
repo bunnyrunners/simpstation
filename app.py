@@ -227,15 +227,12 @@ def sync_airtable_to_postgres():
 
 
 def select_emoji(subscription):
-    """
-    Returns an emoji based on the subscription value.
-    """
     if subscription is None or subscription == "":
-        return ""
+        return "💀"
     try:
         sub = float(subscription)
     except (ValueError, TypeError):
-        return ""
+        return "💀"
     
     if sub >= 92:
         return "😍"
@@ -248,9 +245,9 @@ def select_emoji(subscription):
     elif sub > 0:
         return "😨"
     elif sub == 0:
-        return ""
+        return "💀"
     else:
-        return ""
+        return "💀"
 
 
 def send_to_telegram(message):
