@@ -193,7 +193,7 @@ def create_app():
         update_id = update.get("update_id")
         if update_id in processed_updates:
             print(f"🔍 /receive_telegram_message: Duplicate update received: {update_id}. Ignoring.", flush=True)
-            return {"status": "OK"}, 200  # Still return 200 OK.
+            return {"status": "OK"}, 200
         else:
             processed_updates.add(update_id)
 
@@ -201,7 +201,6 @@ def create_app():
         text_message = update.get("message", {}).get("text")
         if not text_message:
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
-            # Return 200 OK to prevent Telegram from retrying the update.
             return {"error": "Missing message text"}, 200
 
         # Extract all numbers from the text to form the simp_id.
@@ -218,7 +217,7 @@ def create_app():
 
         print(f"🔍 /receive_telegram_message: Extracted simp_id: {simp_id_int}", flush=True)
 
-        # Query the DB for a record with simp_id equal to simp_id_int
+        # Query the DB for a record with simp_id equal to simp_id_int.
         conn = get_db_connection()
         if not conn:
             print("❌ /receive_telegram_message: DB connection failed.", flush=True)
@@ -238,7 +237,12 @@ def create_app():
         if record:
             phone = record[0]
             print(f"🔍 /receive_telegram_message: Found phone: {phone} for simp_id: {simp_id_int}", flush=True)
-            payload = {"phone": phone, "message": text_message}
+            
+            # Remove the leading simp_id from the message.
+            # This regex removes any leading digits and surrounding whitespace.
+            cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
+            
+            payload = {"phone": phone, "message": cleaned_message}
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {payload}", flush=True)
             try:
                 response = requests.post(MACROTRIGGER_URL, json=payload)
