@@ -99,6 +99,18 @@ def sync_airtable_to_postgres():
     cursor.execute("DELETE FROM simps")
     for record in records:
         fields = record.get("fields", {})
+        # Process the Subscription field: remove "%" and convert to a float.
+        sub_raw = fields.get("Subscription")
+        if sub_raw is not None:
+            try:
+                # Remove % and whitespace, then convert to float.
+                sub_value = float(str(sub_raw).replace("%", "").strip())
+            except Exception as e:
+                print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
+                sub_value = None
+        else:
+            sub_value = None
+
         try:
             cursor.execute("""
                 INSERT INTO simps (simp_id, simp_name, status, intent, phone, subscription, duration, created)
@@ -116,7 +128,7 @@ def sync_airtable_to_postgres():
                 fields.get("Status"),
                 fields.get("🤝Intent"),
                 str(fields.get("Phone")),  # Ensure TEXT storage.
-                fields.get("Subscription"),  # Should be a number.
+                sub_value,  # Subscription as a number.
                 fields.get("Duration"),
                 fields.get("Created")
             ))
