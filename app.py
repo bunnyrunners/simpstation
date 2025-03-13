@@ -180,66 +180,55 @@ def create_app():
         conn.close()
         return {"tables": tables}
 
-    @app.route("/handle_telegram", methods=["POST"])
-    def handle_telegram():
-        print("🔍 /handle_telegram: Received a Telegram update", flush=True)
-        update = request.json
-        print(f"🔍 /handle_telegram: Update received: {update}", flush=True)
-        message_obj = update.get("message")
-        if not message_obj:
-            print("❌ /handle_telegram: No 'message' found in update.", flush=True)
-            return {"error": "No message found"}, 400
+    @app.route("/receive_telegram_message", methods=["POST"])
+    def receive_telegram_message():
+        print("🔍 /receive_telegram_message: Received a POST request", flush=True)
+        data = request.json
+        print(f"🔍 /receive_telegram_message: Data received: {data}", flush=True)
+        text_message = data.get("message")
+        if not text_message:
+            print("❌ /receive_telegram_message: Missing message.", flush=True)
+            return {"error": "Missing message"}, 400
 
-        # Skip messages sent by the bot
-        sender = message_obj.get("from", {})
-        if sender.get("is_bot"):
-            print("❌ /handle_telegram: Message sent by bot, ignoring.", flush=True)
-            return {"status": "Ignored bot message"}, 200
+        # Extract all numbers from the message and form the Simp_ID2
+        numbers = re.findall(r'\d+', text_message)
+        if not numbers:
+            print("❌ /receive_telegram_message: No numbers found in the message.", flush=True)
+            return {"error": "No numbers found in message"}, 400
+        simp_id2 = ''.join(numbers)
+        print(f"🔍 /receive_telegram_message: Extracted Simp_ID2: {simp_id2}", flush=True)
 
-        text = message_obj.get("text", "")
-        print(f"🔍 /handle_telegram: Raw text received: '{text}'", flush=True)
-
-        # Extract the Simp_ID (first token) and the remaining message
-        tokens = text.strip().split(maxsplit=1)
-        if len(tokens) < 2:
-            print("❌ /handle_telegram: Message format invalid; not enough tokens.", flush=True)
-            return {"error": "Invalid message format"}, 400
-
-        simp_id_str = tokens[0]
-        clean_message = tokens[1]
-        print(f"🔍 /handle_telegram: Extracted simp_id: '{simp_id_str}', clean message: '{clean_message}'", flush=True)
-
-        try:
-            simp_id = int(simp_id_str)
-            print(f"🔍 /handle_telegram: Converted simp_id to integer: {simp_id}", flush=True)
-        except ValueError:
-            print("❌ /handle_telegram: Simp_ID is not a valid integer.", flush=True)
-            return {"error": "Invalid Simp_ID"}, 400
-
-        # Query the database for the phone number using the simp_id
+        # Query the DB for a record with simp_id equals to simp_id2
         conn = get_db_connection()
         if not conn:
-            print("❌ /handle_telegram: DB connection failed during lookup.", flush=True)
+            print("❌ /receive_telegram_message: DB connection failed.", flush=True)
             return {"error": "DB connection failed"}, 500
         cursor = conn.cursor()
-        print(f"🔍 /handle_telegram: Querying DB for simp_id: {simp_id}", flush=True)
-        cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id,))
-        record = cursor.fetchone()
-        print(f"🔍 /handle_telegram: DB query returned: {record}", flush=True)
+        print(f"🔍 /receive_telegram_message: Querying DB for simp_id: {simp_id2}", flush=True)
+        try:
+            cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id2,))
+            record = cursor.fetchone()
+        except Exception as e:
+            print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
+            return {"error": "DB query failed"}, 500
         cursor.close()
         conn.close()
-        if not record:
-            print(f"❌ /handle_telegram: No record found for simp_id: {simp_id}", flush=True)
-            return {"error": "Simp_ID not found"}, 404
-        phone = record[0]
-        print(f"🔍 /handle_telegram: Retrieved phone number '{phone}' for simp_id: {simp_id}", flush=True)
-
-        # Build payload for Macrodroid including the phone number and the cleaned message
-        payload = {"Phone": phone, "Message": clean_message}
-        print(f"🔍 /handle_telegram: Forwarding payload: {payload}", flush=True)
-        response = requests.post(MACROTRIGGER_URL, json=payload)
-        print(f"✅ /handle_telegram: Macrodroid response: {response.text}", flush=True)
-        return {"status": "Message forwarded"}, 200
+        if record:
+            phone = record[0]
+            print(f"🔍 /receive_telegram_message: Found phone: {phone} for Simp_ID2: {simp_id2}", flush=True)
+            # Build payload with phone and the original telegram message
+            payload = {"phone": phone, "message": text_message}
+            print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {payload}", flush=True)
+            try:
+                response = requests.post(MACROTRIGGER_URL, json=payload)
+                print(f"🔍 /receive_telegram_message: Sent payload, response: {response.text}", flush=True)
+            except Exception as e:
+                print(f"❌ /receive_telegram_message: Error sending payload to Macrodroid: {e}", flush=True)
+                return {"error": "Failed to send to Macrodroid"}, 500
+            return {"status": "Trigger sent"}, 200
+        else:
+            print("❌ /receive_telegram_message: No record found with that Simp_ID.", flush=True)
+            return {"error": "No record found for Simp_ID"}, 404
 
     return app
 
