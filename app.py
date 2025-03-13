@@ -15,6 +15,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Macrodroid trigger URL for replies
 MACROTRIGGER_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f/reply"
 
+# A simple in-memory store for processed update IDs.
+processed_updates = set()
+
 
 def get_db_connection():
     try:
@@ -186,23 +189,32 @@ def create_app():
         update = request.json
         print(f"🔍 /receive_telegram_message: Update received: {update}", flush=True)
         
+        # Track processed update IDs to prevent duplicate processing.
+        update_id = update.get("update_id")
+        if update_id in processed_updates:
+            print(f"🔍 /receive_telegram_message: Duplicate update received: {update_id}. Ignoring.", flush=True)
+            return {"status": "OK"}, 200  # Still return 200 OK.
+        else:
+            processed_updates.add(update_id)
+
         # Extract the text from the nested Telegram update structure.
         text_message = update.get("message", {}).get("text")
         if not text_message:
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
-            return {"error": "Missing message text"}, 400
+            # Return 200 OK to prevent Telegram from retrying the update.
+            return {"error": "Missing message text"}, 200
 
         # Extract all numbers from the text to form the simp_id.
         numbers = re.findall(r'\d+', text_message)
         if not numbers:
             print("❌ /receive_telegram_message: No numbers found in the message.", flush=True)
-            return {"error": "No numbers found in message"}, 400
+            return {"error": "No numbers found in message"}, 200
         simp_id_str = ''.join(numbers)
         try:
             simp_id_int = int(simp_id_str)
         except ValueError as e:
             print(f"❌ /receive_telegram_message: Error converting simp_id to integer: {e}", flush=True)
-            return {"error": "Invalid simp_id"}, 400
+            return {"error": "Invalid simp_id"}, 200
 
         print(f"🔍 /receive_telegram_message: Extracted simp_id: {simp_id_int}", flush=True)
 
@@ -210,7 +222,7 @@ def create_app():
         conn = get_db_connection()
         if not conn:
             print("❌ /receive_telegram_message: DB connection failed.", flush=True)
-            return {"error": "DB connection failed"}, 500
+            return {"error": "DB connection failed"}, 200
         cursor = conn.cursor()
         print(f"🔍 /receive_telegram_message: Querying DB for simp_id: {simp_id_int}", flush=True)
         try:
@@ -220,7 +232,7 @@ def create_app():
             print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
             cursor.close()
             conn.close()
-            return {"error": "DB query failed"}, 500
+            return {"error": "DB query failed"}, 200
         cursor.close()
         conn.close()
         if record:
@@ -233,11 +245,11 @@ def create_app():
                 print(f"🔍 /receive_telegram_message: Sent payload, response: {response.text}", flush=True)
             except Exception as e:
                 print(f"❌ /receive_telegram_message: Error sending payload to Macrodroid: {e}", flush=True)
-                return {"error": "Failed to send to Macrodroid"}, 500
+                return {"error": "Failed to send to Macrodroid"}, 200
             return {"status": "Trigger sent"}, 200
         else:
             print("❌ /receive_telegram_message: No record found with that simp_id.", flush=True)
-            return {"error": "No record found for simp_id"}, 404
+            return {"error": "No record found for simp_id"}, 200
 
     return app
 
