@@ -45,6 +45,7 @@ def init_db():
                 status TEXT NOT NULL,
                 intent TEXT,
                 phone TEXT UNIQUE NOT NULL,
+                subscription NUMERIC,
                 duration INTEGER,
                 created DATE
             )
@@ -89,12 +90,13 @@ def sync_airtable_to_postgres():
         fields = record.get("fields", {})
         try:
             cursor.execute("""
-                INSERT INTO simps (simp_id, simp_name, status, intent, phone, duration, created)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO simps (simp_id, simp_name, status, intent, phone, subscription, duration, created)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (phone) DO UPDATE SET
                     simp_name = EXCLUDED.simp_name,
                     status = EXCLUDED.status,
                     intent = EXCLUDED.intent,
+                    subscription = EXCLUDED.subscription,
                     duration = EXCLUDED.duration,
                     created = EXCLUDED.created
             """, (
@@ -102,7 +104,8 @@ def sync_airtable_to_postgres():
                 fields.get("Simp"),
                 fields.get("Status"),
                 fields.get("🤝Intent"),
-                str(fields.get("Phone")),  # Cast to string to ensure TEXT storage.
+                str(fields.get("Phone")),  # Ensure TEXT storage.
+                fields.get("Subscription"),  # This should be a number.
                 fields.get("Duration"),
                 fields.get("Created")
             ))
@@ -149,14 +152,16 @@ def create_app():
             return {"error": "DB connection failed"}, 500
         cursor = conn.cursor()
         print(f"🔍 /receive_text: Querying DB for phone: {phone_number}", flush=True)
-        cursor.execute("SELECT simp_id, simp_name FROM simps WHERE phone = %s", (phone_number,))
+        # Now also retrieve the subscription field.
+        cursor.execute("SELECT simp_id, simp_name, subscription FROM simps WHERE phone = %s", (phone_number,))
         simp = cursor.fetchone()
         print(f"🔍 /receive_text: DB query result: {simp}", flush=True)
         cursor.close()
         conn.close()
         if simp:
-            simp_id, simp_name = simp
-            formatted_message = f"{simp_id} | {simp_name} - {text_message}"
+            simp_id, simp_name, subscription = simp
+            emoji = "✅" if subscription is not None and subscription > 28 else "⚠️"
+            formatted_message = f"{emoji} {simp_id} | {simp_name}: {text_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -217,7 +222,8 @@ def create_app():
 
         print(f"🔍 /receive_telegram_message: Extracted simp_id: {simp_id_int}", flush=True)
 
-        # Query the DB for a record with simp_id equal to simp_id_int.
+        # Query the DB for a record with simp_id equal to simp_id_int,
+        # and also retrieve subscription and simp_name.
         conn = get_db_connection()
         if not conn:
             print("❌ /receive_telegram_message: DB connection failed.", flush=True)
@@ -225,7 +231,7 @@ def create_app():
         cursor = conn.cursor()
         print(f"🔍 /receive_telegram_message: Querying DB for simp_id: {simp_id_int}", flush=True)
         try:
-            cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id_int,))
+            cursor.execute("SELECT phone, subscription, simp_name FROM simps WHERE simp_id = %s", (simp_id_int,))
             record = cursor.fetchone()
         except Exception as e:
             print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
@@ -235,15 +241,13 @@ def create_app():
         cursor.close()
         conn.close()
         if record:
-            phone = record[0]
-            print(f"🔍 /receive_telegram_message: Found phone: {phone} for simp_id: {simp_id_int}", flush=True)
-            
-            # Remove the leading simp_id from the message.
-            # This regex removes any leading digits and surrounding whitespace.
+            phone, subscription, simp_name = record
+            emoji = "✅" if subscription is not None and subscription > 28 else "⚠️"
+            # Remove the leading simp_id from the text.
             cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
-            
-            payload = {"phone": phone, "message": cleaned_message}
-            print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {payload}", flush=True)
+            final_message = f"{emoji} {simp_id_int} | {simp_name}: {cleaned_message}"
+            print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
+            payload = {"phone": phone, "message": final_message}
             try:
                 response = requests.post(MACROTRIGGER_URL, json=payload)
                 print(f"🔍 /receive_telegram_message: Sent payload, response: {response.text}", flush=True)
