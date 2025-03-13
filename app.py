@@ -55,7 +55,7 @@ def init_db():
     except Exception as e:
         print(f"❌ DB: Error during DB initialization: {e}", flush=True)
     
-    # Alter the table to add the subscription column if it doesn't exist.
+    # Add the subscription column if it doesn't exist.
     try:
         cursor.execute("""
             ALTER TABLE simps
@@ -66,7 +66,7 @@ def init_db():
     except Exception as e:
         print(f"⚠️ DB: Could not alter 'subscription' column (it might already exist): {e}", flush=True)
     
-    # Force the phone column to be TEXT even if table existed before.
+    # Ensure the phone column is stored as TEXT.
     try:
         cursor.execute("ALTER TABLE simps ALTER COLUMN phone TYPE TEXT USING phone::text;")
         conn.commit()
@@ -99,23 +99,22 @@ def sync_airtable_to_postgres():
     cursor.execute("DELETE FROM simps")
     for record in records:
         fields = record.get("fields", {})
-        # Process the Subscription field.
+        # Process the Subscription field from the formula.
         sub_raw = fields.get("Subscription")
         sub_value = None
         if sub_raw is not None:
-            print(f"🔍 Sync: Raw Subscription value: {sub_raw}", flush=True)
-            if isinstance(sub_raw, (int, float)):
-                sub_value = float(sub_raw)
-            else:
-                try:
-                    # Remove % sign and whitespace then convert.
-                    sub_value = float(str(sub_raw).replace("%", "").strip())
-                except Exception as e:
-                    print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
-                    sub_value = None
-        else:
-            print("🔍 Sync: Subscription field is missing.", flush=True)
-        
+            try:
+                # If it's a string, remove any "%" and whitespace.
+                if isinstance(sub_raw, str):
+                    sub_value = float(sub_raw.replace("%", "").strip())
+                else:
+                    sub_value = float(sub_raw)
+                # If the value seems to be a fraction (<= 1), assume it's a percentage fraction and multiply by 100.
+                if sub_value <= 1:
+                    sub_value *= 100
+            except Exception as e:
+                print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
+                sub_value = None
         try:
             cursor.execute("""
                 INSERT INTO simps (simp_id, simp_name, status, intent, phone, subscription, duration, created)
@@ -133,11 +132,11 @@ def sync_airtable_to_postgres():
                 fields.get("Status"),
                 fields.get("🤝Intent"),
                 str(fields.get("Phone")),  # Ensure TEXT storage.
-                sub_value,  # Subscription as a number.
+                sub_value,  # Subscription as a numeric value.
                 fields.get("Duration"),
                 fields.get("Created")
             ))
-            print(f"✅ Sync: Inserted/Updated record for simp_id: {fields.get('Simp_ID')} with Subscription: {sub_value}", flush=True)
+            print(f"✅ Sync: Inserted/Updated record for simp_id: {fields.get('Simp_ID')}", flush=True)
         except Exception as e:
             print(f"❌ Sync: Error inserting record: {e}", flush=True)
     conn.commit()
