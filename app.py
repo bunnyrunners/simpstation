@@ -176,7 +176,7 @@ def sync_airtable_to_postgres():
     cursor.execute("DELETE FROM simps")
     for record in records:
         fields = record.get("fields", {})
-        # Process the Subscription field from the formula.
+        # Process the Subscription field.
         sub_raw = fields.get("Subscription")
         sub_value = None
         if sub_raw is not None:
@@ -291,7 +291,8 @@ def create_app():
         if simp:
             simp_id, simp_name, subscription = simp
             emoji = select_emoji(subscription)
-            formatted_message = f"{emoji} {simp_id} | {simp_name}: {text_message}"
+            # Remove simp_id from the message.
+            formatted_message = f"{emoji} {simp_name}: {text_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -338,7 +339,7 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # Smart strings replacement:
+        # Smart string replacement: Look for any words inside curly braces.
         smart_matches = re.findall(r'\{([^}]+)\}', text_message)
         for key in smart_matches:
             key_lower = key.lower()
@@ -350,15 +351,15 @@ def create_app():
             else:
                 text_message = text_message.replace("{" + key + "}", smart_strings[key_lower])
         
-        # If the message contains "/smartwords", send a wordbank of smart strings.
+        # If the message contains "/smartwords", list all smart strings.
         if "/smartwords" in text_message:
             wordbank_lines = [f"🪪 {{{k}}} - {v}" for k, v in smart_strings.items()]
             wordbank_msg = "\n".join(wordbank_lines)
-            print(f"🔍 /receive_telegram_message: Sending smartwords wordbank:\n{wordbank_msg}", flush=True)
+            print(f"🔍 /receive_telegram_message: Sending smartwords:\n{wordbank_msg}", flush=True)
             send_to_telegram(wordbank_msg)
             return {"status": "Smartwords sent"}, 200
 
-        # If the message contains "/diary", fetch and list all diary notes.
+        # If the message contains "/diary", fetch and list diary notes.
         if "/diary" in text_message:
             print("🔍 /receive_telegram_message: /diary command detected.", flush=True)
             conn = get_db_connection()
@@ -381,7 +382,7 @@ def create_app():
                 for rec in records:
                     simp_id, simp_name, notes, subscription = rec
                     emoji = select_emoji(subscription)
-                    note_field = notes if notes else "empty"
+                    note_field = notes if notes else "No note"
                     line = f"{emoji} {simp_id} | {simp_name} | 📔 {note_field}"
                     lines.append(line)
                 reply_message = "\n".join(lines)
@@ -392,7 +393,7 @@ def create_app():
         # If the message contains "/note", trigger diary update mode.
         if "/note" in text_message:
             print("🔍 /receive_telegram_message: /note command detected.", flush=True)
-            send_to_telegram("📔When ready, leave a note. (e.g. 8 Gets paid on thursdays)")
+            send_to_telegram("📔When you're ready, leave a note on a simp. (e.g. \"8 loves when I call him daddy\")")
             pending_diary = True
             return {"status": "Diary update mode activated"}, 200
 
@@ -503,7 +504,8 @@ def create_app():
             phone, subscription, simp_name = record
             emoji = select_emoji(subscription)
             cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
-            final_message = f"{emoji} {simp_id_int} | {simp_name}: {cleaned_message}"
+            # Remove the simp_id from the final message.
+            final_message = f"{emoji} {simp_name}: {cleaned_message}"
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
             try:
