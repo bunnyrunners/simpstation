@@ -292,7 +292,7 @@ def create_app():
             simp_id, simp_name, subscription = simp
             emoji = select_emoji(subscription)
             # Remove simp_id from the message.
-            formatted_message = f"{emoji} {text_message}"
+            formatted_message = f"{emoji} {simp_name}: {text_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -504,7 +504,7 @@ def create_app():
             phone, subscription, simp_name = record
             emoji = select_emoji(subscription)
             cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
-            # Final message excludes both simp_id and simp_name.
+            # Remove both simp_id and simp_name; only send the cleaned message.
             final_message = f"{cleaned_message}"
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
