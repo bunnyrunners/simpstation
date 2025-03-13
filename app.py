@@ -183,36 +183,38 @@ def create_app():
     @app.route("/receive_telegram_message", methods=["POST"])
     def receive_telegram_message():
         print("🔍 /receive_telegram_message: Received a POST request", flush=True)
-        data = request.json
-        print(f"🔍 /receive_telegram_message: Data received: {data}", flush=True)
-        text_message = data.get("message")
+        update = request.json
+        print(f"🔍 /receive_telegram_message: Update received: {update}", flush=True)
+        
+        # Extract the text from the nested Telegram update structure.
+        text_message = update.get("message", {}).get("text")
         if not text_message:
-            print("❌ /receive_telegram_message: Missing message.", flush=True)
-            return {"error": "Missing message"}, 400
+            print("❌ /receive_telegram_message: Missing message text.", flush=True)
+            return {"error": "Missing message text"}, 400
 
-        # Extract all numbers from the message and form the Simp_ID2
+        # Extract all numbers from the text to form the simp_id.
         numbers = re.findall(r'\d+', text_message)
         if not numbers:
             print("❌ /receive_telegram_message: No numbers found in the message.", flush=True)
             return {"error": "No numbers found in message"}, 400
-        simp_id2 = ''.join(numbers)
+        simp_id_str = ''.join(numbers)
         try:
-            simp_id2_int = int(simp_id2)
+            simp_id_int = int(simp_id_str)
         except ValueError as e:
-            print(f"❌ /receive_telegram_message: Error converting Simp_ID2 to integer: {e}", flush=True)
-            return {"error": "Invalid Simp_ID"}, 400
+            print(f"❌ /receive_telegram_message: Error converting simp_id to integer: {e}", flush=True)
+            return {"error": "Invalid simp_id"}, 400
 
-        print(f"🔍 /receive_telegram_message: Extracted Simp_ID2 (int): {simp_id2_int}", flush=True)
+        print(f"🔍 /receive_telegram_message: Extracted simp_id: {simp_id_int}", flush=True)
 
-        # Query the DB for a record with simp_id equal to simp_id2_int
+        # Query the DB for a record with simp_id equal to simp_id_int
         conn = get_db_connection()
         if not conn:
             print("❌ /receive_telegram_message: DB connection failed.", flush=True)
             return {"error": "DB connection failed"}, 500
         cursor = conn.cursor()
-        print(f"🔍 /receive_telegram_message: Querying DB for simp_id: {simp_id2_int}", flush=True)
+        print(f"🔍 /receive_telegram_message: Querying DB for simp_id: {simp_id_int}", flush=True)
         try:
-            cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id2_int,))
+            cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id_int,))
             record = cursor.fetchone()
         except Exception as e:
             print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
@@ -223,8 +225,7 @@ def create_app():
         conn.close()
         if record:
             phone = record[0]
-            print(f"🔍 /receive_telegram_message: Found phone: {phone} for Simp_ID2: {simp_id2_int}", flush=True)
-            # Build payload with phone and the original telegram message
+            print(f"🔍 /receive_telegram_message: Found phone: {phone} for simp_id: {simp_id_int}", flush=True)
             payload = {"phone": phone, "message": text_message}
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {payload}", flush=True)
             try:
@@ -235,8 +236,8 @@ def create_app():
                 return {"error": "Failed to send to Macrodroid"}, 500
             return {"status": "Trigger sent"}, 200
         else:
-            print("❌ /receive_telegram_message: No record found with that Simp_ID.", flush=True)
-            return {"error": "No record found for Simp_ID"}, 404
+            print("❌ /receive_telegram_message: No record found with that simp_id.", flush=True)
+            return {"error": "No record found for simp_id"}, 404
 
     return app
 
