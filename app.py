@@ -18,6 +18,9 @@ MACROTRIGGER_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d146
 # In-memory store for processed Telegram update IDs (to avoid duplicate processing)
 processed_updates = set()
 
+# Global flag to indicate that a diary update is pending.
+pending_diary = False
+
 
 def get_db_connection():
     try:
@@ -66,6 +69,17 @@ def init_db():
     except Exception as e:
         print(f"⚠️ DB: Could not alter 'subscription' column (it might already exist): {e}", flush=True)
     
+    # Add the new notes column if it doesn't exist.
+    try:
+        cursor.execute("""
+            ALTER TABLE simps
+            ADD COLUMN IF NOT EXISTS notes TEXT
+        """)
+        conn.commit()
+        print("✅ DB: Ensured 'notes' column exists.", flush=True)
+    except Exception as e:
+        print(f"⚠️ DB: Could not alter 'notes' column (it might already exist): {e}", flush=True)
+    
     # Ensure the phone column is stored as TEXT.
     try:
         cursor.execute("ALTER TABLE simps ALTER COLUMN phone TYPE TEXT USING phone::text;")
@@ -113,26 +127,30 @@ def sync_airtable_to_postgres():
             except Exception as e:
                 print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
                 sub_value = None
+        # Fetch the Notes field.
+        notes = fields.get("Notes")
         try:
             cursor.execute("""
-                INSERT INTO simps (simp_id, simp_name, status, intent, phone, subscription, duration, created)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO simps (simp_id, simp_name, status, intent, phone, subscription, duration, created, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (phone) DO UPDATE SET
                     simp_name = EXCLUDED.simp_name,
                     status = EXCLUDED.status,
                     intent = EXCLUDED.intent,
                     subscription = EXCLUDED.subscription,
                     duration = EXCLUDED.duration,
-                    created = EXCLUDED.created
+                    created = EXCLUDED.created,
+                    notes = EXCLUDED.notes
             """, (
                 fields.get("Simp_ID"),
                 fields.get("Simp"),
                 fields.get("Status"),
                 fields.get("🤝Intent"),
-                str(fields.get("Phone")),  # Ensure TEXT storage.
-                sub_value,  # Subscription as a numeric value.
+                str(fields.get("Phone")),
+                sub_value,
                 fields.get("Duration"),
-                fields.get("Created")
+                fields.get("Created"),
+                notes
             ))
             print(f"✅ Sync: Inserted/Updated record for simp_id: {fields.get('Simp_ID')}", flush=True)
         except Exception as e:
@@ -238,6 +256,7 @@ def create_app():
 
     @app.route("/receive_telegram_message", methods=["POST"])
     def receive_telegram_message():
+        global pending_diary
         print("🔍 /receive_telegram_message: Received a POST request", flush=True)
         update = request.json
         print(f"🔍 /receive_telegram_message: Update received: {update}", flush=True)
@@ -256,7 +275,49 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If the message contains '/fetchsimps', fetch and list all records.
+        # If the message contains "/diary", trigger the diary mode.
+        if "/diary" in text_message:
+            print("🔍 /receive_telegram_message: /diary command detected.", flush=True)
+            send_to_telegram("📔When you're ready, leave a note on a simp. (e.g \"8 loves when I call him daddy\")")
+            pending_diary = True
+            return {"status": "Diary mode activated"}, 200
+
+        # If diary mode is pending, process the diary update.
+        if pending_diary:
+            # Expect a diary update message in the format: "<simp_id> <note text>"
+            numbers = re.findall(r'\d+', text_message)
+            if not numbers:
+                print("❌ /receive_telegram_message: No simp_id found in diary update.", flush=True)
+                return {"error": "No simp_id found in diary update"}, 200
+            simp_id_str = ''.join(numbers)
+            try:
+                simp_id_int = int(simp_id_str)
+            except ValueError as e:
+                print(f"❌ /receive_telegram_message: Error converting simp_id to integer in diary update: {e}", flush=True)
+                return {"error": "Invalid simp_id in diary update"}, 200
+            # Remove the simp_id from the text to get the note.
+            note_text = re.sub(r'^\s*\d+\s*', '', text_message)
+            # Update the Notes field in the database.
+            conn = get_db_connection()
+            if not conn:
+                return {"error": "DB connection failed"}, 200
+            cursor = conn.cursor()
+            try:
+                cursor.execute("UPDATE simps SET notes = %s WHERE simp_id = %s", (note_text, simp_id_int))
+                conn.commit()
+                print(f"🔍 /receive_telegram_message: Updated notes for simp_id {simp_id_int} with note: {note_text}", flush=True)
+            except Exception as e:
+                cursor.close()
+                conn.close()
+                print(f"❌ /receive_telegram_message: DB update error in diary mode: {e}", flush=True)
+                return {"error": "DB update failed"}, 200
+            cursor.close()
+            conn.close()
+            send_to_telegram(f"Diary note updated for simp_id {simp_id_int}.")
+            pending_diary = False
+            return {"status": "Diary note updated"}, 200
+
+        # If the message contains "/fetchsimps", fetch and list all records.
         if "/fetchsimps" in text_message:
             print("🔍 /receive_telegram_message: /fetchsimps command detected.", flush=True)
             conn = get_db_connection()
