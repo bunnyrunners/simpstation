@@ -22,7 +22,7 @@ processed_updates = set()
 # Global flag for diary update mode (triggered by /note command)
 pending_diary = False
 
-# Smart strings dictionary (keys are stored in lower-case)
+# Smart strings dictionary (keys stored in lower-case)
 smart_strings = {
     "venmo": "Kelly_marie2697",
     "cashapp": "Marie2697",
@@ -292,7 +292,7 @@ def create_app():
             simp_id, simp_name, subscription = simp
             emoji = select_emoji(subscription)
             # Remove simp_id from the message.
-            formatted_message = f"{emoji} {simp_name}: {text_message}"
+            formatted_message = f"{emoji} {text_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -359,7 +359,7 @@ def create_app():
             send_to_telegram(wordbank_msg)
             return {"status": "Smartwords sent"}, 200
 
-        # If the message contains "/diary", fetch and list diary notes.
+        # If the message contains "/diary", fetch and list all diary notes.
         if "/diary" in text_message:
             print("🔍 /receive_telegram_message: /diary command detected.", flush=True)
             conn = get_db_connection()
@@ -504,8 +504,8 @@ def create_app():
             phone, subscription, simp_name = record
             emoji = select_emoji(subscription)
             cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
-            # Remove the simp_id from the final message.
-            final_message = f"{emoji} {simp_name}: {cleaned_message}"
+            # Final message excludes both simp_id and simp_name.
+            final_message = f"{emoji} {cleaned_message}"
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
             try:
