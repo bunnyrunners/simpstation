@@ -1,6 +1,8 @@
 import os
 import re
 import random
+import time
+import threading
 import psycopg2
 import requests
 from flask import Flask, request
@@ -228,12 +230,12 @@ def select_emoji(subscription):
     """
     Returns an emoji based on the subscription value.
     """
-    if subscription is None:
-        return "❓"
+    if subscription is None or subscription == "":
+        return ""
     try:
         sub = float(subscription)
     except (ValueError, TypeError):
-        return "❓"
+        return ""
     
     if sub >= 92:
         return "😍"
@@ -246,9 +248,9 @@ def select_emoji(subscription):
     elif sub > 0:
         return "😨"
     elif sub == 0:
-        return "💀"
+        return ""
     else:
-        return "❓"
+        return ""
 
 
 def send_to_telegram(message):
@@ -257,6 +259,14 @@ def send_to_telegram(message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     response = requests.post(url, json=payload)
     print(f"🔍 Telegram: Sent message, response: {response.text}", flush=True)
+
+
+def run_periodic_sync():
+    # Run the Airtable sync every 30 minutes.
+    while True:
+        time.sleep(1800)
+        print("🔍 Periodic sync triggered.", flush=True)
+        sync_airtable_to_postgres()
 
 
 def create_app():
@@ -268,6 +278,9 @@ def create_app():
     # Initialize the database on startup.
     with app.app_context():
         init_db()
+    
+    # Start the periodic sync in a background thread.
+    threading.Thread(target=run_periodic_sync, daemon=True).start()
 
     @app.route("/receive_text", methods=["POST"])
     def receive_text():
@@ -294,7 +307,7 @@ def create_app():
             # Extract the leading number (simp_id) from the message and then remove it.
             m = re.match(r'^\s*\d+\s*(.*)', text_message)
             cleaned_message = m.group(1) if m else text_message
-            # Now include both emoji and simp_id in the message.
+            # Include both emoji and simp_id and simp_name.
             formatted_message = f"{emoji} {simp_id} | {simp_name}: {cleaned_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
@@ -385,7 +398,7 @@ def create_app():
                 for rec in records:
                     simp_id, simp_name, notes, subscription = rec
                     emoji = select_emoji(subscription)
-                    note_field = notes if notes else "No note"
+                    note_field = notes if notes else "empty"
                     line = f"{emoji} {simp_id} | {simp_name} | 📔 {note_field}"
                     lines.append(line)
                 reply_message = "\n".join(lines)
@@ -473,7 +486,7 @@ def create_app():
             return {"status": "Fetchsimps trigger sent"}, 200
 
         # Process as a regular text message.
-        # Extract only the leading number as the simp_id, then remove it.
+        # Extract only the leading number as the simp_id and remove it from the message.
         m = re.match(r'^\s*(\d+)\s*(.*)', text_message)
         if not m:
             print("❌ /receive_telegram_message: Could not extract simp_id from message.", flush=True)
