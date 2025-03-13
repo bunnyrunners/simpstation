@@ -291,8 +291,10 @@ def create_app():
         if simp:
             simp_id, simp_name, subscription = simp
             emoji = select_emoji(subscription)
-            # Remove simp_id from the message.
-            formatted_message = f"{emoji} {simp_name}: {text_message}"
+            # Remove the leading simp_id from the message (if present).
+            m = re.match(r'^\s*\d+\s*(.*)', text_message)
+            cleaned_message = m.group(1) if m else text_message
+            formatted_message = f"{simp_name}: {cleaned_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -339,7 +341,7 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # Smart string replacement: Look for any words inside curly braces.
+        # Smart string replacement: Look for words inside curly braces.
         smart_matches = re.findall(r'\{([^}]+)\}', text_message)
         for key in smart_matches:
             key_lower = key.lower()
@@ -399,17 +401,13 @@ def create_app():
 
         # If diary update mode is pending, process the diary update.
         if pending_diary:
-            numbers = re.findall(r'\d+', text_message)
-            if not numbers:
+            # Extract only the leading simp_id and the rest of the message.
+            m = re.match(r'^\s*(\d+)\s*(.*)', text_message)
+            if not m:
                 print("❌ /receive_telegram_message: No simp_id found in diary update.", flush=True)
                 return {"error": "No simp_id found in diary update"}, 200
-            simp_id_str = ''.join(numbers)
-            try:
-                simp_id_int = int(simp_id_str)
-            except ValueError as e:
-                print(f"❌ /receive_telegram_message: Error converting simp_id in diary update: {e}", flush=True)
-                return {"error": "Invalid simp_id in diary update"}, 200
-            note_text = re.sub(r'^\s*\d+\s*', '', text_message)
+            simp_id_int = int(m.group(1))
+            note_text = m.group(2)
             conn = get_db_connection()
             if not conn:
                 return {"error": "DB connection failed"}, 200
@@ -475,18 +473,14 @@ def create_app():
             return {"status": "Fetchsimps trigger sent"}, 200
 
         # Process as a regular text message.
-        numbers = re.findall(r'\d+', text_message)
-        if not numbers:
-            print("❌ /receive_telegram_message: No numbers found in the message.", flush=True)
-            return {"error": "No numbers found in message"}, 200
-        simp_id_str = ''.join(numbers)
-        try:
-            simp_id_int = int(simp_id_str)
-        except ValueError as e:
-            print(f"❌ /receive_telegram_message: Error converting simp_id: {e}", flush=True)
-            return {"error": "Invalid simp_id"}, 200
-
-        print(f"🔍 /receive_telegram_message: Extracted simp_id: {simp_id_int}", flush=True)
+        # Extract the leading simp_id from the message.
+        m = re.match(r'^\s*(\d+)\s*(.*)', text_message)
+        if not m:
+            print("❌ /receive_telegram_message: Could not extract simp_id from message.", flush=True)
+            return {"error": "Could not extract simp_id"}, 200
+        simp_id_int = int(m.group(1))
+        cleaned_message = m.group(2)  # Remaining message text after simp_id
+        
         conn = get_db_connection()
         if not conn:
             return {"error": "DB connection failed"}, 200
@@ -503,8 +497,7 @@ def create_app():
         if record:
             phone, subscription, simp_name = record
             emoji = select_emoji(subscription)
-            cleaned_message = re.sub(r'^\s*\d+\s*', '', text_message)
-            # Remove both simp_id and simp_name; only send the cleaned message.
+            # Final message excludes the simp_id and simp_name.
             final_message = f"{cleaned_message}"
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
