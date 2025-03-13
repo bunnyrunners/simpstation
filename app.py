@@ -475,7 +475,7 @@ def create_app():
                 for rec in records:
                     simp_id, simp_name, intent, subscription, duration = rec
                     emoji = select_emoji(subscription)
-                    line = f"{emoji} {simp_id} | {simp_name} | 💗 {intent} | ⌛ {duration} days"
+                    line = f"{emoji} {simp_id} | {simp_name} | {intent} | {duration} days"
                     lines.append(line)
                 reply_message = "\n".join(lines)
             print(f"🔍 /receive_telegram_message: Sending fetchsimps reply:\n{reply_message}", flush=True)
