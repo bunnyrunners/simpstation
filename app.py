@@ -22,6 +22,14 @@ processed_updates = set()
 # Global flag for diary update mode (triggered by /note command)
 pending_diary = False
 
+# Smart strings dictionary (keys should be lower-case)
+smart_strings = {
+    "venmo": "Kelly_marie2697",
+    "cashapp": "Marie2697",
+    "instagram": "four4kelly",
+    "onlyfans": "4kkelly"
+}
+
 # Diary responses array.
 diary_responses = [
     "Love it! ❤️",
@@ -168,7 +176,7 @@ def sync_airtable_to_postgres():
     cursor.execute("DELETE FROM simps")
     for record in records:
         fields = record.get("fields", {})
-        # Process the Subscription field from the formula.
+        # Process the Subscription field.
         sub_raw = fields.get("Subscription")
         sub_value = None
         if sub_raw is not None:
@@ -330,7 +338,28 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If the message contains "/diary", fetch all records and reply with diary notes.
+        # Smart string replacement: Look for any words in curly braces.
+        smart_matches = re.findall(r'\{([^}]+)\}', text_message)
+        for key in smart_matches:
+            key_lower = key.lower()
+            if key_lower not in smart_strings:
+                error_msg = f"Message failed. Cannot find {{{key}}}."
+                print(f"🔍 {error_msg}", flush=True)
+                send_to_telegram(error_msg)
+                return {"status": "Error: Unknown smart string"}, 200
+            else:
+                # Replace {key} with the corresponding smart string value.
+                text_message = text_message.replace("{" + key + "}", smart_strings[key_lower])
+        
+        # If the message contains "/wordbank", list all smart strings.
+        if "/wordbank" in text_message:
+            wordbank_lines = [f"🪪 {{{k}}} - {v}" for k, v in smart_strings.items()]
+            wordbank_msg = "\n".join(wordbank_lines)
+            print(f"🔍 /receive_telegram_message: Sending wordbank:\n{wordbank_msg}", flush=True)
+            send_to_telegram(wordbank_msg)
+            return {"status": "Wordbank sent"}, 200
+
+        # If the message contains "/diary", fetch and list all diary notes.
         if "/diary" in text_message:
             print("🔍 /receive_telegram_message: /diary command detected.", flush=True)
             conn = get_db_connection()
@@ -364,7 +393,7 @@ def create_app():
         # If the message contains "/note", trigger diary update mode.
         if "/note" in text_message:
             print("🔍 /receive_telegram_message: /note command detected.", flush=True)
-            send_to_telegram("📔When you're ready, leave a note on a simp. (e.g. \"8 loves when I call him daddy\")")
+            send_to_telegram("📔When ready, leave a note. (e.g. \"8 Gets paid on Thursdays\")")
             pending_diary = True
             return {"status": "Diary update mode activated"}, 200
 
