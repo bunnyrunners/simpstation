@@ -196,26 +196,34 @@ def create_app():
             print("❌ /receive_telegram_message: No numbers found in the message.", flush=True)
             return {"error": "No numbers found in message"}, 400
         simp_id2 = ''.join(numbers)
-        print(f"🔍 /receive_telegram_message: Extracted Simp_ID2: {simp_id2}", flush=True)
+        try:
+            simp_id2_int = int(simp_id2)
+        except ValueError as e:
+            print(f"❌ /receive_telegram_message: Error converting Simp_ID2 to integer: {e}", flush=True)
+            return {"error": "Invalid Simp_ID"}, 400
 
-        # Query the DB for a record with simp_id equals to simp_id2
+        print(f"🔍 /receive_telegram_message: Extracted Simp_ID2 (int): {simp_id2_int}", flush=True)
+
+        # Query the DB for a record with simp_id equal to simp_id2_int
         conn = get_db_connection()
         if not conn:
             print("❌ /receive_telegram_message: DB connection failed.", flush=True)
             return {"error": "DB connection failed"}, 500
         cursor = conn.cursor()
-        print(f"🔍 /receive_telegram_message: Querying DB for simp_id: {simp_id2}", flush=True)
+        print(f"🔍 /receive_telegram_message: Querying DB for simp_id: {simp_id2_int}", flush=True)
         try:
-            cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id2,))
+            cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id2_int,))
             record = cursor.fetchone()
         except Exception as e:
             print(f"❌ /receive_telegram_message: DB query error: {e}", flush=True)
+            cursor.close()
+            conn.close()
             return {"error": "DB query failed"}, 500
         cursor.close()
         conn.close()
         if record:
             phone = record[0]
-            print(f"🔍 /receive_telegram_message: Found phone: {phone} for Simp_ID2: {simp_id2}", flush=True)
+            print(f"🔍 /receive_telegram_message: Found phone: {phone} for Simp_ID2: {simp_id2_int}", flush=True)
             # Build payload with phone and the original telegram message
             payload = {"phone": phone, "message": text_message}
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {payload}", flush=True)
