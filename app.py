@@ -38,6 +38,7 @@ def init_db():
         return
     cursor = conn.cursor()
     try:
+        # Create the table if it doesn't exist.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS simps (
                 simp_id SERIAL PRIMARY KEY,
@@ -45,7 +46,6 @@ def init_db():
                 status TEXT NOT NULL,
                 intent TEXT,
                 phone TEXT UNIQUE NOT NULL,
-                subscription NUMERIC,
                 duration INTEGER,
                 created DATE
             )
@@ -55,13 +55,24 @@ def init_db():
     except Exception as e:
         print(f"❌ DB: Error during DB initialization: {e}", flush=True)
     
-    # Force the phone column to be TEXT even if table existed before
+    # Alter the table to add the subscription column if it doesn't exist.
+    try:
+        cursor.execute("""
+            ALTER TABLE simps
+            ADD COLUMN IF NOT EXISTS subscription NUMERIC
+        """)
+        conn.commit()
+        print("✅ DB: Ensured 'subscription' column exists.", flush=True)
+    except Exception as e:
+        print(f"⚠️ DB: Could not alter 'subscription' column (it might already exist): {e}", flush=True)
+    
+    # Force the phone column to be TEXT even if table existed before.
     try:
         cursor.execute("ALTER TABLE simps ALTER COLUMN phone TYPE TEXT USING phone::text;")
         conn.commit()
         print("✅ DB: Ensured 'phone' column is TEXT.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'phone' column to TEXT (it might already be TEXT): {e}", flush=True)
+        print(f"⚠️ DB: Could not alter 'phone' column to TEXT: {e}", flush=True)
     
     cursor.close()
     conn.close()
@@ -105,7 +116,7 @@ def sync_airtable_to_postgres():
                 fields.get("Status"),
                 fields.get("🤝Intent"),
                 str(fields.get("Phone")),  # Ensure TEXT storage.
-                fields.get("Subscription"),  # This should be a number.
+                fields.get("Subscription"),  # Should be a number.
                 fields.get("Duration"),
                 fields.get("Created")
             ))
@@ -179,7 +190,6 @@ def create_app():
             return {"error": "DB connection failed"}, 500
         cursor = conn.cursor()
         print(f"🔍 /receive_text: Querying DB for phone: {phone_number}", flush=True)
-        # Also retrieve subscription.
         cursor.execute("SELECT simp_id, simp_name, subscription FROM simps WHERE phone = %s", (phone_number,))
         simp = cursor.fetchone()
         print(f"🔍 /receive_text: DB query result: {simp}", flush=True)
