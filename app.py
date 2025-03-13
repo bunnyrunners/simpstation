@@ -384,7 +384,7 @@ def create_app():
                 for rec in records:
                     simp_id, simp_name, notes, subscription = rec
                     emoji = select_emoji(subscription)
-                    note_field = notes if notes else "No note"
+                    note_field = notes if notes else "empty"
                     line = f"{emoji} {simp_id} | {simp_name} | 📔 {note_field}"
                     lines.append(line)
                 reply_message = "\n".join(lines)
@@ -395,7 +395,7 @@ def create_app():
         # If the message contains "/note", trigger diary update mode.
         if "/note" in text_message:
             print("🔍 /receive_telegram_message: /note command detected.", flush=True)
-            send_to_telegram("📔When you're ready, leave a note on a simp. (e.g. \"8 loves when I call him daddy\")")
+            send_to_telegram("✍🏼When ready, leave a note. (e.g. \"8 Gets paid on Thursdays\")")
             pending_diary = True
             return {"status": "Diary update mode activated"}, 200
 
