@@ -99,18 +99,23 @@ def sync_airtable_to_postgres():
     cursor.execute("DELETE FROM simps")
     for record in records:
         fields = record.get("fields", {})
-        # Process the Subscription field: remove "%" and convert to a float.
+        # Process the Subscription field.
         sub_raw = fields.get("Subscription")
+        sub_value = None
         if sub_raw is not None:
-            try:
-                # Remove % and whitespace, then convert to float.
-                sub_value = float(str(sub_raw).replace("%", "").strip())
-            except Exception as e:
-                print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
-                sub_value = None
+            print(f"🔍 Sync: Raw Subscription value: {sub_raw}", flush=True)
+            if isinstance(sub_raw, (int, float)):
+                sub_value = float(sub_raw)
+            else:
+                try:
+                    # Remove % sign and whitespace then convert.
+                    sub_value = float(str(sub_raw).replace("%", "").strip())
+                except Exception as e:
+                    print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
+                    sub_value = None
         else:
-            sub_value = None
-
+            print("🔍 Sync: Subscription field is missing.", flush=True)
+        
         try:
             cursor.execute("""
                 INSERT INTO simps (simp_id, simp_name, status, intent, phone, subscription, duration, created)
@@ -132,7 +137,7 @@ def sync_airtable_to_postgres():
                 fields.get("Duration"),
                 fields.get("Created")
             ))
-            print(f"✅ Sync: Inserted/Updated record for simp_id: {fields.get('Simp_ID')}", flush=True)
+            print(f"✅ Sync: Inserted/Updated record for simp_id: {fields.get('Simp_ID')} with Subscription: {sub_value}", flush=True)
         except Exception as e:
             print(f"❌ Sync: Error inserting record: {e}", flush=True)
     conn.commit()
