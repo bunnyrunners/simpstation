@@ -291,10 +291,11 @@ def create_app():
         if simp:
             simp_id, simp_name, subscription = simp
             emoji = select_emoji(subscription)
-            # Remove the leading simp_id from the message (if present).
+            # Extract the leading number (simp_id) from the message and then remove it.
             m = re.match(r'^\s*\d+\s*(.*)', text_message)
             cleaned_message = m.group(1) if m else text_message
-            formatted_message = f"{simp_name}: {cleaned_message}"
+            # Now include both emoji and simp_id in the message.
+            formatted_message = f"{emoji} {simp_id} | {simp_name}: {cleaned_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -384,7 +385,7 @@ def create_app():
                 for rec in records:
                     simp_id, simp_name, notes, subscription = rec
                     emoji = select_emoji(subscription)
-                    note_field = notes if notes else "empty"
+                    note_field = notes if notes else "No note"
                     line = f"{emoji} {simp_id} | {simp_name} | 📔 {note_field}"
                     lines.append(line)
                 reply_message = "\n".join(lines)
@@ -395,17 +396,16 @@ def create_app():
         # If the message contains "/note", trigger diary update mode.
         if "/note" in text_message:
             print("🔍 /receive_telegram_message: /note command detected.", flush=True)
-            send_to_telegram("✍🏼When ready, leave a note. (e.g. \"8 gets paid on thursdays\")")
+            send_to_telegram("✍🏼When you're ready, leave a note on a simp. (e.g. \"8 gets paid on thursdays\")")
             pending_diary = True
             return {"status": "Diary update mode activated"}, 200
 
         # If diary update mode is pending, process the diary update.
         if pending_diary:
-            # Extract only the leading simp_id and the rest of the message.
             m = re.match(r'^\s*(\d+)\s*(.*)', text_message)
             if not m:
-                print("❌ /receive_telegram_message: No simp_id found in diary update.", flush=True)
-                return {"error": "No simp_id found in diary update"}, 200
+                print("❌ /receive_telegram_message: Could not extract simp_id from diary update.", flush=True)
+                return {"error": "Could not extract simp_id"}, 200
             simp_id_int = int(m.group(1))
             note_text = m.group(2)
             conn = get_db_connection()
@@ -473,13 +473,13 @@ def create_app():
             return {"status": "Fetchsimps trigger sent"}, 200
 
         # Process as a regular text message.
-        # Extract the leading simp_id from the message.
+        # Extract only the leading number as the simp_id, then remove it.
         m = re.match(r'^\s*(\d+)\s*(.*)', text_message)
         if not m:
             print("❌ /receive_telegram_message: Could not extract simp_id from message.", flush=True)
             return {"error": "Could not extract simp_id"}, 200
         simp_id_int = int(m.group(1))
-        cleaned_message = m.group(2)  # Remaining message text after simp_id
+        cleaned_message = m.group(2)  # The remaining message text after the simp_id
         
         conn = get_db_connection()
         if not conn:
@@ -497,7 +497,7 @@ def create_app():
         if record:
             phone, subscription, simp_name = record
             emoji = select_emoji(subscription)
-            # Final message excludes the simp_id and simp_name.
+            # Final message excludes simp_id, simp_name, and emoji.
             final_message = f"{cleaned_message}"
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
