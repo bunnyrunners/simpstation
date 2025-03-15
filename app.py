@@ -56,40 +56,40 @@ diary_responses = [
     "Let’s go! 🚀",
     "That’s insane! 🤪",
     "You got it. 💪",
-    "Sounds good. 🎵",
+    "Sounds good! 🎵",
     "Oh heck! 😮",
     "Whoa, okay! 😵‍💫",
     "True that. 📜",
     "Oh snap! 📸",
     "Can’t lie! 🤥",
-    "That’s crazy. 🌀",
-    "Say less. 🤫",
+    "That’s crazy! 🌀",
+    "Say less! 🤫",
     "Alright then! 🤷‍♂️",
-    "Big mood. 🎭",
+    "Big mood! 🎭",
     "Sheesh! 🥶",
     "Wild stuff! 🦁",
     "Love that! 💖",
-    "I’m shook. 🌊",
-    "Facts. 🔎",
+    "I’m shook! 🌊",
+    "Facts! 🔎",
     "Big vibes! ✨",
-    "Bet. 🎲",
+    "Bet! 🎲",
     "Oh shoot! 🎯",
-    "So true. ✅",
+    "So true! ✅",
     "Good call! 📞",
     "Absolutely! 💯",
     "I see! 👁️",
-    "That’s deep. 🌊",
-    "Wow, okay. 😮‍💨",
-    "Makes sense. 🤓",
-    "That tracks. 🚆",
-    "No doubt. 🤝",
-    "I feel that. 🎶",
+    "That’s deep! 🌊",
+    "Wow, okay! 😮‍💨",
+    "Makes sense! 🤓",
+    "That tracks! 🚆",
+    "No doubt! 🤝",
+    "I feel that! 🎶",
     "Well, alright! 🤠",
-    "That’s cool. ❄️",
+    "That’s cool! ❄️",
     "Big energy! ⚡",
-    "Say what? 🤨",
+    "Say what! 🤨",
     "Go off! 🔥",
-    "So be it. 🕊️",
+    "So be it! 🕊️",
     "Okay then! 🤔"
 ]
 
@@ -266,6 +266,7 @@ def send_to_telegram(message):
 
 
 def generate_voice_message(voice_text):
+    # Use the tested format for ElevenLabs
     elevenlabs_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
@@ -273,9 +274,15 @@ def generate_voice_message(voice_text):
     }
     data = {"text": voice_text}
     response = requests.post(elevenlabs_url, json=data, headers=headers)
+    print(f"DEBUG: ElevenLabs response status: {response.status_code}", flush=True)
+    print(f"DEBUG: ElevenLabs response text: {response.text}", flush=True)
     if response.status_code == 200:
-        # Assuming the API returns JSON with an "audio_url" field
-        audio_url = response.json().get("audio_url")
+        try:
+            result = response.json()
+            audio_url = result.get("audio_url")
+        except Exception as e:
+            print(f"❌ ElevenLabs: Failed to decode JSON: {response.text}", flush=True)
+            return None
         print(f"✅ ElevenLabs: Generated voice message at {audio_url}", flush=True)
         return audio_url
     else:
@@ -409,8 +416,8 @@ def create_app():
         # If the message contains "v/", handle voice message creation.
         if "v/" in text_message:
             parts = text_message.split("v/", 1)
-            regular_text = parts[0].strip()  # e.g. "I hope you like this"
-            voice_text = parts[1].strip()    # e.g. "Hey baby, I miss you."
+            regular_text = parts[0].strip()  # e.g. "13 How about this?"
+            voice_text = parts[1].strip()    # e.g. "this is my voice"
             voice_audio_url = generate_voice_message(voice_text)
             if voice_audio_url:
                 pending_voice = {
