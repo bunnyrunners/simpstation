@@ -32,8 +32,8 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 # Google Drive folder ID for storing voice files (the "Voice" folder)
 DRIVE_VOICE_FOLDER_ID = os.getenv("DRIVE_VOICE_FOLDER_ID")
 
-# Base URL for Macrodroid endpoints
-# For audio messages we send to /getaudio, for text messages to /reply.
+# Base URL for Macrodroid endpoints.
+# For audio messages, we send to /getaudio.
 MACROTRIGGER_BASE_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f"
 
 # Scopes for Google Drive
@@ -46,11 +46,10 @@ processed_updates = set()
 pending_diary = False
 
 # Global pending voice message store (for ElevenLabs voice integration)
-# It will store: voice_text (cleaned text sent to ElevenLabs), voice_data (binary, at 320 kbps),
-# and phone (the intended recipient's phone number)
+# It will store: voice_text (cleaned text sent to ElevenLabs), voice_data (binary, at 320 kbps), and phone (intended recipient's phone)
 pending_voice = None
 
-# Smart strings dictionary (for text messages, not used in voice payloads)
+# Smart strings dictionary (used for text messages)
 smart_strings = {
     "venmo": "Kelly_marie2697",
     "cashapp": "Marie2697",
@@ -112,29 +111,6 @@ diary_responses = [
     "Okay then! 🤔"
 ]
 
-
-def select_emoji(subscription):
-    if subscription is None or subscription == "":
-        return "💀"
-    try:
-        sub = float(subscription)
-    except (ValueError, TypeError):
-        return "💀"
-    if sub >= 92:
-        return "😍"
-    elif sub >= 62:
-        return "😀"
-    elif sub >= 37:
-        return "🙂"
-    elif sub >= 18:
-        return "😐"
-    elif sub > 0:
-        return "😨"
-    elif sub == 0:
-        return "💀"
-    else:
-        return "💀"
-
 # ---------- Google Drive Service Functions ----------
 def get_drive_service():
     """Gets a Google Drive service using OAuth (credentials stored in token.json)."""
@@ -155,7 +131,7 @@ def get_drive_service():
 def upload_audio_to_gdrive(audio_data, file_name):
     """
     Uploads audio_data to Google Drive in the "Voice" folder,
-    naming the file as file_name, and returns the public URL.
+    naming the file as file_name, and returns its public URL.
     """
     service = get_drive_service()
     file_metadata = {
@@ -213,6 +189,17 @@ def send_to_telegram(message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     response = requests.post(url, json=payload)
     print(f"🔍 Telegram: Sent text, response: {response.text}", flush=True)
+
+def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
+    """
+    Sends the audio file directly to Telegram using sendAudio,
+    with the given caption.
+    """
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
+    files = {"audio": ("voice.mp3", audio_data, "audio/mpeg")}
+    data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
+    response = requests.post(url, data=data, files=files)
+    print(f"DEBUG: send_voice_to_telegram response: {response.text}", flush=True)
 
 def send_voice_url_to_macrodroid(audio_url, phone, cleaned_text):
     """
@@ -383,10 +370,10 @@ def create_app():
         conn.close()
         if simp:
             simp_id, simp_name, subscription = simp
-            emoji = select_emoji(subscription)
+            emoji = ""  # For text messages we might use emoji; adjust as needed.
             m = re.match(r'^\s*\d+\s*(.*)', text_message)
             cleaned_message = m.group(1) if m else text_message
-            formatted_message = f"{emoji} {simp_id} | {simp_name}: {cleaned_message}"
+            formatted_message = f"{emoji}{simp_id} | {simp_name}: {cleaned_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -430,11 +417,11 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # Voice message command handling: Expected format "prefix v/voice_text"
+        # Voice message command handling: expected format "prefix v/voice_text"
         if "v/" in text_message:
             parts = text_message.split("v/", 1)
-            prefix = parts[0].strip()   # Intended recipient info, e.g., "13"
-            voice_text = parts[1].strip()  # Cleaned voice content
+            prefix = parts[0].strip()   # Intended recipient info (e.g., "13")
+            voice_text = parts[1].strip()  # The text to be synthesized
             phone = ""
             if prefix:
                 m = re.match(r'^(\d+)', prefix)
@@ -455,7 +442,8 @@ def create_app():
                 "phone": phone
             }
             if pending_voice["voice_data"]:
-                send_to_telegram("Voice message preview sent. Reply with 'send' to upload and send the audio.")
+                # Send the audio preview to Telegram with caption "Yay or nay?"
+                send_voice_to_telegram(pending_voice["voice_data"], caption="Yay or nay?")
                 return {"status": "Voice generation triggered, awaiting confirmation"}, 200
             else:
                 send_to_telegram("Error generating voice message.")
@@ -464,7 +452,7 @@ def create_app():
         # Handle confirmation for pending voice message
         if pending_voice and text_message.lower() in ["send", "next", "cancel"]:
             if text_message.lower() == "send":
-                # Use the voice_text as the file name (sanitize spaces)
+                # Use the voice_text as file name, replacing spaces with underscores
                 file_name = pending_voice["voice_text"].replace(" ", "_") + ".mp3"
                 gdrive_url = upload_audio_to_gdrive(pending_voice["voice_data"], file_name)
                 if gdrive_url:
@@ -480,7 +468,7 @@ def create_app():
                 new_voice_data = generate_voice_message(pending_voice["voice_text"])
                 if new_voice_data:
                     pending_voice["voice_data"] = new_voice_data
-                    send_to_telegram("New voice message preview sent.")
+                    send_voice_to_telegram(new_voice_data, caption="Yay or nay? (new version)")
                 else:
                     send_to_telegram("Error generating new voice message.")
                 return {"status": "Voice message updated"}, 200
@@ -529,9 +517,8 @@ def create_app():
                 lines = []
                 for rec in records:
                     simp_id, simp_name, notes, subscription = rec
-                    emoji = select_emoji(subscription)
                     note_field = notes if notes else "empty"
-                    line = f"{emoji} {simp_id} | {simp_name} | 📔 {note_field}"
+                    line = f"{simp_id} | {simp_name} | {note_field}"
                     lines.append(line)
                 reply_message = "\n".join(lines)
             print(f"🔍 /receive_telegram_message: Sending diary reply:\n{reply_message}", flush=True)
@@ -605,8 +592,7 @@ def create_app():
                 lines = []
                 for rec in records:
                     simp_id, simp_name, intent, subscription, duration = rec
-                    emoji = select_emoji(subscription)
-                    line = f"{emoji} {simp_id} | {simp_name} | {intent} | {duration} days"
+                    line = f"{simp_id} | {simp_name} | {intent} | {duration} days"
                     lines.append(line)
                 reply_message = "\n".join(lines)
             print(f"🔍 /receive_telegram_message: Sending fetchsimps reply:\n{reply_message}", flush=True)
@@ -634,7 +620,6 @@ def create_app():
         conn.close()
         if record:
             phone, subscription, simp_name = record
-            emoji = select_emoji(subscription)
             final_message = f"{cleaned_message}"
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
