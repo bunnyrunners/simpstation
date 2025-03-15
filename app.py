@@ -196,10 +196,15 @@ def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
 
 def send_voice_url_to_macrodroid(audio_url, phone, cleaned_text):
     endpoint = f"{MACROTRIGGER_BASE_URL}/getaudio"
-    payload = {"phone": phone, "message": f"{cleaned_text}\n{audio_url}"}
+    payload = {
+        "phone": phone,
+        "message": cleaned_text,
+        "audio_url": audio_url
+    }
     response = requests.post(endpoint, json=payload)
     print(f"DEBUG: send_voice_url_to_macrodroid response: {response.text}", flush=True)
     return response
+
 
 # ---------- Database and Airtable Sync Functions ----------
 def get_db_connection():
