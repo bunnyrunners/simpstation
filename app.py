@@ -4,10 +4,18 @@ import random
 import time
 import threading
 import io
+import uuid
 import psycopg2
 import requests
 from flask import Flask, request
 from pydub import AudioSegment
+
+# Google Drive API imports
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 # Environment variables
 DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL URL from Render
@@ -21,8 +29,15 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
-# Macrodroid trigger URL for replies (assumed to accept multipart file uploads)
-MACROTRIGGER_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f/reply"
+# Google Drive folder ID for storing voice files (the "Voice" folder)
+DRIVE_VOICE_FOLDER_ID = os.getenv("DRIVE_VOICE_FOLDER_ID")
+
+# Base URL for Macrodroid endpoints
+# For audio messages we send to /getaudio, for text messages to /reply.
+MACROTRIGGER_BASE_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f"
+
+# Scopes for Google Drive
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 # In-memory store for processed Telegram update IDs (to avoid duplicate processing)
 processed_updates = set()
@@ -31,10 +46,11 @@ processed_updates = set()
 pending_diary = False
 
 # Global pending voice message store (for ElevenLabs voice integration)
-# It will store: regular_text, voice_text, and voice_data (binary, compressed)
+# It will store: voice_text (cleaned text sent to ElevenLabs), voice_data (binary, at 320 kbps),
+# and phone (the intended recipient's phone number)
 pending_voice = None
 
-# Smart strings dictionary (keys stored in lower-case)
+# Smart strings dictionary (for text messages, not used in voice payloads)
 smart_strings = {
     "venmo": "Kelly_marie2697",
     "cashapp": "Marie2697",
@@ -96,21 +112,135 @@ diary_responses = [
     "Okay then! 🤔"
 ]
 
+
+def select_emoji(subscription):
+    if subscription is None or subscription == "":
+        return "💀"
+    try:
+        sub = float(subscription)
+    except (ValueError, TypeError):
+        return "💀"
+    if sub >= 92:
+        return "😍"
+    elif sub >= 62:
+        return "😀"
+    elif sub >= 37:
+        return "🙂"
+    elif sub >= 18:
+        return "😐"
+    elif sub > 0:
+        return "😨"
+    elif sub == 0:
+        return "💀"
+    else:
+        return "💀"
+
+# ---------- Google Drive Service Functions ----------
+def get_drive_service():
+    """Gets a Google Drive service using OAuth (credentials stored in token.json)."""
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    service = build('drive', 'v3', credentials=creds)
+    return service
+
+def upload_audio_to_gdrive(audio_data, file_name):
+    """
+    Uploads audio_data to Google Drive in the "Voice" folder,
+    naming the file as file_name, and returns the public URL.
+    """
+    service = get_drive_service()
+    file_metadata = {
+        'name': file_name,
+        'parents': [DRIVE_VOICE_FOLDER_ID]
+    }
+    media = MediaIoBaseUpload(io.BytesIO(audio_data), mimetype='audio/mpeg')
+    file = service.files().create(body=file_metadata,
+                                  media_body=media,
+                                  fields='id').execute()
+    file_id = file.get('id')
+    # Make file public
+    permission = {'type': 'anyone', 'role': 'reader'}
+    service.permissions().create(fileId=file_id, body=permission).execute()
+    file_info = service.files().get(fileId=file_id, fields='webContentLink').execute()
+    audio_url = file_info.get('webContentLink')
+    print(f"DEBUG: Uploaded audio to Google Drive as '{file_name}', URL: {audio_url}", flush=True)
+    return audio_url
+
+# ---------- Audio Processing Functions ----------
+def compress_audio(audio_data, target_bitrate="320k"):
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
+        output_buffer = io.BytesIO()
+        audio.export(output_buffer, format="mp3", bitrate=target_bitrate)
+        compressed_data = output_buffer.getvalue()
+        print(f"DEBUG: Compressed audio to {len(compressed_data)} bytes", flush=True)
+        return compressed_data
+    except Exception as e:
+        print(f"❌ Error compressing audio: {e}", flush=True)
+        return audio_data
+
+def generate_voice_message(voice_text):
+    elevenlabs_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "User-Agent": "PostmanRuntime/7.43.0"
+    }
+    data = {"text": voice_text}
+    response = requests.post(elevenlabs_url, json=data, headers=headers)
+    print(f"DEBUG: ElevenLabs response status: {response.status_code}", flush=True)
+    print(f"DEBUG: ElevenLabs response length: {len(response.content)} bytes", flush=True)
+    if response.status_code == 200:
+        compressed = compress_audio(response.content, target_bitrate="320k")
+        return compressed
+    else:
+        print(f"❌ ElevenLabs: Error generating voice message: {response.text}", flush=True)
+        return None
+
+# ---------- Messaging Functions ----------
+def send_to_telegram(message):
+    print(f"🔍 Telegram: Sending text: '{message}'", flush=True)
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    response = requests.post(url, json=payload)
+    print(f"🔍 Telegram: Sent text, response: {response.text}", flush=True)
+
+def send_voice_url_to_macrodroid(audio_url, phone, cleaned_text):
+    """
+    Sends a POST request to Macrodroid's /getaudio endpoint with a JSON payload
+    containing the phone number, the cleaned text, and the audio URL.
+    """
+    endpoint = f"{MACROTRIGGER_BASE_URL}/getaudio"
+    payload = {"phone": phone, "message": f"{cleaned_text}\n{audio_url}"}
+    response = requests.post(endpoint, json=payload)
+    print(f"DEBUG: send_voice_url_to_macrodroid response: {response.text}", flush=True)
+    return response
+
+# ---------- Database and Airtable Sync Functions ----------
 def get_db_connection():
     try:
-        print("🔍 DB: Attempting to connect to PostgreSQL...", flush=True)
+        print("🔍 DB: Attempting connection...", flush=True)
         conn = psycopg2.connect(DATABASE_URL, sslmode="require")
-        print("✅ DB: Successfully connected to PostgreSQL!", flush=True)
+        print("✅ DB: Connected.", flush=True)
         return conn
     except Exception as e:
         print(f"❌ DB: Connection failed: {e}", flush=True)
         return None
 
 def init_db():
-    print("🔍 DB: Initializing database...", flush=True)
+    print("🔍 DB: Initializing...", flush=True)
     conn = get_db_connection()
     if not conn:
-        print("❌ DB: No connection available during init.", flush=True)
+        print("❌ DB: No connection.", flush=True)
         return
     cursor = conn.cursor()
     try:
@@ -126,37 +256,27 @@ def init_db():
             )
         """)
         conn.commit()
-        print("✅ DB: Database initialized (table 'simps' created if not exists).", flush=True)
+        print("✅ DB: Table ensured.", flush=True)
     except Exception as e:
-        print(f"❌ DB: Error during DB initialization: {e}", flush=True)
-    
+        print(f"❌ DB: Error: {e}", flush=True)
     try:
-        cursor.execute("""
-            ALTER TABLE simps
-            ADD COLUMN IF NOT EXISTS subscription NUMERIC
-        """)
+        cursor.execute("ALTER TABLE simps ADD COLUMN IF NOT EXISTS subscription NUMERIC")
         conn.commit()
-        print("✅ DB: Ensured 'subscription' column exists.", flush=True)
+        print("✅ DB: 'subscription' column ensured.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'subscription' column: {e}", flush=True)
-    
+        print(f"⚠️ DB: Could not alter 'subscription': {e}", flush=True)
     try:
-        cursor.execute("""
-            ALTER TABLE simps
-            ADD COLUMN IF NOT EXISTS notes TEXT
-        """)
+        cursor.execute("ALTER TABLE simps ADD COLUMN IF NOT EXISTS notes TEXT")
         conn.commit()
-        print("✅ DB: Ensured 'notes' column exists.", flush=True)
+        print("✅ DB: 'notes' column ensured.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'notes' column: {e}", flush=True)
-    
+        print(f"⚠️ DB: Could not alter 'notes': {e}", flush=True)
     try:
         cursor.execute("ALTER TABLE simps ALTER COLUMN phone TYPE TEXT USING phone::text;")
         conn.commit()
-        print("✅ DB: Ensured 'phone' column is TEXT.", flush=True)
+        print("✅ DB: 'phone' column ensured as TEXT.", flush=True)
     except Exception as e:
-        print(f"⚠️ DB: Could not alter 'phone' column to TEXT: {e}", flush=True)
-    
+        print(f"⚠️ DB: Could not alter 'phone' column: {e}", flush=True)
     cursor.close()
     conn.close()
     print("🔍 DB: Starting Airtable sync...", flush=True)
@@ -168,16 +288,15 @@ def sync_airtable_to_postgres():
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
-        print(f"❌ Sync: Airtable fetch error: {response.text}", flush=True)
+        print(f"❌ Sync: Airtable error: {response.text}", flush=True)
         return
     records = response.json().get("records", [])
-    print(f"🔍 Sync: Retrieved {len(records)} records from Airtable.", flush=True)
+    print(f"🔍 Sync: Retrieved {len(records)} records.", flush=True)
     conn = get_db_connection()
     if not conn:
-        print("❌ Sync: No DB connection available during sync.", flush=True)
+        print("❌ Sync: No DB connection.", flush=True)
         return
     cursor = conn.cursor()
-    print("🔍 Sync: Deleting existing records in 'simps' table...", flush=True)
     cursor.execute("DELETE FROM simps")
     for record in records:
         fields = record.get("fields", {})
@@ -192,7 +311,7 @@ def sync_airtable_to_postgres():
                 if sub_value <= 1:
                     sub_value *= 100
             except Exception as e:
-                print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
+                print(f"❌ Sync: Error processing Subscription: {e}", flush=True)
                 sub_value = None
         notes = fields.get("Notes")
         try:
@@ -218,7 +337,7 @@ def sync_airtable_to_postgres():
                 fields.get("Created"),
                 notes
             ))
-            print(f"✅ Sync: Inserted/Updated record for simp_id: {fields.get('Simp_ID')}", flush=True)
+            print(f"✅ Sync: Record inserted/updated for simp_id: {fields.get('Simp_ID')}", flush=True)
         except Exception as e:
             print(f"❌ Sync: Error inserting record: {e}", flush=True)
     conn.commit()
@@ -226,85 +345,14 @@ def sync_airtable_to_postgres():
     conn.close()
     print("✅ Sync: Airtable sync complete!", flush=True)
 
-def select_emoji(subscription):
-    if subscription is None or subscription == "":
-        return "💀"
-    try:
-        sub = float(subscription)
-    except (ValueError, TypeError):
-        return "💀"
-    if sub >= 92:
-        return "😍"
-    elif sub >= 62:
-        return "😀"
-    elif sub >= 37:
-        return "🙂"
-    elif sub >= 18:
-        return "😐"
-    elif sub > 0:
-        return "😨"
-    elif sub == 0:
-        return "💀"
-    else:
-        return "💀"
-
-def send_to_telegram(message):
-    print(f"🔍 Telegram: Sending text to Telegram: '{message}'", flush=True)
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    response = requests.post(url, json=payload)
-    print(f"🔍 Telegram: Sent text, response: {response.text}", flush=True)
-
-def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
-    files = {"audio": ("voice.mp3", audio_data, "audio/mpeg")}
-    data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
-    response = requests.post(url, data=data, files=files)
-    print(f"DEBUG: send_voice_to_telegram response: {response.text}", flush=True)
-
-def send_voice_to_macrodroid(audio_data, message):
-    files = {"voice": ("voice.mp3", audio_data, "audio/mpeg")}
-    data = {"message": message}
-    response = requests.post(MACROTRIGGER_URL, data=data, files=files)
-    print(f"DEBUG: send_voice_to_macrodroid response: {response.text}", flush=True)
-
-def compress_audio(audio_data, target_bitrate="16k"):
-    try:
-        audio = AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
-        output_buffer = io.BytesIO()
-        audio.export(output_buffer, format="mp3", bitrate=target_bitrate)
-        compressed_data = output_buffer.getvalue()
-        print(f"DEBUG: Compressed audio to {len(compressed_data)} bytes", flush=True)
-        return compressed_data
-    except Exception as e:
-        print(f"❌ Error compressing audio: {e}", flush=True)
-        return audio_data  # Fallback: return original
-
-def generate_voice_message(voice_text):
-    elevenlabs_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
-    headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-        "User-Agent": "PostmanRuntime/7.43.0"
-    }
-    data = {"text": voice_text}
-    response = requests.post(elevenlabs_url, json=data, headers=headers)
-    print(f"DEBUG: ElevenLabs response status: {response.status_code}", flush=True)
-    print(f"DEBUG: ElevenLabs response length: {len(response.content)} bytes", flush=True)
-    if response.status_code == 200:
-        # Compress the binary audio to reduce size
-        compressed = compress_audio(response.content)
-        return compressed
-    else:
-        print(f"❌ ElevenLabs: Error generating voice message: {response.text}", flush=True)
-        return None
-
+# ---------- Periodic Sync ----------
 def run_periodic_sync():
     while True:
         time.sleep(1800)
         print("🔍 Periodic sync triggered.", flush=True)
         sync_airtable_to_postgres()
 
+# ---------- Flask App ----------
 def create_app():
     app = Flask(__name__)
     print(f"🔍 App: DATABASE_URL = {DATABASE_URL}", flush=True)
@@ -382,19 +430,57 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # Handle pending voice message confirmations.
+        # Voice message command handling: Expected format "prefix v/voice_text"
+        if "v/" in text_message:
+            parts = text_message.split("v/", 1)
+            prefix = parts[0].strip()   # Intended recipient info, e.g., "13"
+            voice_text = parts[1].strip()  # Cleaned voice content
+            phone = ""
+            if prefix:
+                m = re.match(r'^(\d+)', prefix)
+                if m:
+                    simp_id = int(m.group(1))
+                    conn = get_db_connection()
+                    if conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT phone FROM simps WHERE simp_id = %s", (simp_id,))
+                        record = cursor.fetchone()
+                        cursor.close()
+                        conn.close()
+                        if record:
+                            phone = record[0]
+            pending_voice = {
+                "voice_text": voice_text,
+                "voice_data": generate_voice_message(voice_text),
+                "phone": phone
+            }
+            if pending_voice["voice_data"]:
+                send_to_telegram("Voice message preview sent. Reply with 'send' to upload and send the audio.")
+                return {"status": "Voice generation triggered, awaiting confirmation"}, 200
+            else:
+                send_to_telegram("Error generating voice message.")
+                return {"error": "Voice generation failed"}, 200
+
+        # Handle confirmation for pending voice message
         if pending_voice and text_message.lower() in ["send", "next", "cancel"]:
             if text_message.lower() == "send":
-                final_text = f"{pending_voice['regular_text']}"
-                send_voice_to_macrodroid(pending_voice["voice_data"], final_text)
-                send_to_telegram("Voice message sent!")
+                # Use the voice_text as the file name (sanitize spaces)
+                file_name = pending_voice["voice_text"].replace(" ", "_") + ".mp3"
+                gdrive_url = upload_audio_to_gdrive(pending_voice["voice_data"], file_name)
+                if gdrive_url:
+                    phone = pending_voice.get("phone", "")
+                    cleaned_text = pending_voice["voice_text"]
+                    send_voice_url_to_macrodroid(gdrive_url, phone, cleaned_text)
+                    send_to_telegram("Voice message sent!")
+                else:
+                    send_to_telegram("Error uploading voice message to Google Drive.")
                 pending_voice = None
                 return {"status": "Voice message sent"}, 200
             elif text_message.lower() == "next":
                 new_voice_data = generate_voice_message(pending_voice["voice_text"])
                 if new_voice_data:
                     pending_voice["voice_data"] = new_voice_data
-                    send_voice_to_telegram(new_voice_data, "Yay or nay – (new version)")
+                    send_to_telegram("New voice message preview sent.")
                 else:
                     send_to_telegram("Error generating new voice message.")
                 return {"status": "Voice message updated"}, 200
@@ -403,23 +489,7 @@ def create_app():
                 send_to_telegram("Voice message canceled.")
                 return {"status": "Voice message canceled"}, 200
 
-        if "v/" in text_message:
-            parts = text_message.split("v/", 1)
-            regular_text = parts[0].strip()  # e.g. "13 How about this?"
-            voice_text = parts[1].strip()    # e.g. "coconuts"
-            voice_data = generate_voice_message(voice_text)
-            if voice_data:
-                pending_voice = {
-                    "regular_text": regular_text,
-                    "voice_text": voice_text,
-                    "voice_data": voice_data
-                }
-                send_voice_to_telegram(voice_data, "Yay or nay?")
-                return {"status": "Voice generation triggered, awaiting confirmation"}, 200
-            else:
-                send_to_telegram("Error generating voice message.")
-                return {"error": "Voice generation failed"}, 200
-
+        # Process other commands (smart strings, diary, etc.) as before...
         smart_matches = re.findall(r'\{([^}]+)\}', text_message)
         for key in smart_matches:
             key_lower = key.lower()
@@ -492,7 +562,7 @@ def create_app():
             except Exception as e:
                 cursor.close()
                 conn.close()
-                print(f"❌ /receive_telegram_message: DB update error in diary update: {e}", flush=True)
+                print(f"❌ /receive_telegram_message: DB update error: {e}", flush=True)
                 return {"error": "DB update failed"}, 200
             cursor.close()
             conn.close()
@@ -569,7 +639,7 @@ def create_app():
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
             try:
-                response = requests.post(MACROTRIGGER_URL, json=payload)
+                response = requests.post(MACROTRIGGER_BASE_URL + "/reply", json=payload)
                 print(f"🔍 /receive_telegram_message: Sent payload, response: {response.text}", flush=True)
             except Exception as e:
                 return {"error": "Failed to send to Macrodroid"}, 200
