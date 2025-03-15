@@ -46,7 +46,8 @@ processed_updates = set()
 pending_diary = False
 
 # Global pending voice message store (for ElevenLabs voice integration)
-# It will store: voice_text (cleaned text sent to ElevenLabs), voice_data (binary at 320kbps), and phone (intended recipient's phone)
+# It will store: simp_id (if extracted), voice_text (cleaned text sent to ElevenLabs),
+# voice_data (binary at 320kbps), and phone (intended recipient's phone)
 pending_voice = None
 
 # Smart strings dictionary (used for text messages)
@@ -134,7 +135,7 @@ def get_drive_service():
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            # Use open_browser=False for headless environments
+            # For headless environments, set open_browser=False
             creds = flow.run_local_server(port=0, open_browser=False)
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
@@ -421,12 +422,18 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
+        # If a confirmation command ("send", "next", "cancel") is received but no pending voice exists:
+        if text_message.lower() in ["send", "next", "cancel"] and not pending_voice:
+            send_to_telegram("No pending voice message.")
+            return {"status": "No pending voice message"}, 200
+
         # Voice message command handling: expected format "prefix v/voice_text"
         if "v/" in text_message:
             parts = text_message.split("v/", 1)
             prefix = parts[0].strip()   # Intended recipient info, e.g., "13"
             voice_text = parts[1].strip()  # Text to be synthesized
             phone = ""
+            simp_id = None
             if prefix:
                 m = re.match(r'^(\d+)', prefix)
                 if m:
@@ -441,6 +448,7 @@ def create_app():
                         if record:
                             phone = record[0]
             pending_voice = {
+                "simp_id": simp_id,
                 "voice_text": voice_text,
                 "voice_data": generate_voice_message(voice_text),
                 "phone": phone
