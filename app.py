@@ -33,7 +33,7 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 DRIVE_VOICE_FOLDER_ID = os.getenv("DRIVE_VOICE_FOLDER_ID")
 
 # Base URL for Macrodroid endpoints.
-# For audio messages, we send to /getaudio.
+# For audio messages, we send to /getaudio; for text messages, /reply.
 MACROTRIGGER_BASE_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f"
 
 # Scopes for Google Drive
@@ -46,7 +46,7 @@ processed_updates = set()
 pending_diary = False
 
 # Global pending voice message store (for ElevenLabs voice integration)
-# It will store: voice_text (cleaned text sent to ElevenLabs), voice_data (binary, at 320 kbps), and phone (intended recipient's phone)
+# It will store: voice_text (cleaned text sent to ElevenLabs), voice_data (binary at 320kbps), and phone (intended recipient's phone)
 pending_voice = None
 
 # Smart strings dictionary (used for text messages)
@@ -113,7 +113,19 @@ diary_responses = [
 
 # ---------- Google Drive Service Functions ----------
 def get_drive_service():
-    """Gets a Google Drive service using OAuth (credentials stored in token.json)."""
+    """
+    Returns a Google Drive service using OAuth.
+    If 'credentials.json' is not found, writes it out from the
+    GOOGLE_CREDENTIALS_JSON environment variable.
+    """
+    if not os.path.exists('credentials.json'):
+        credentials_content = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if credentials_content:
+            with open('credentials.json', 'w') as f:
+                f.write(credentials_content)
+            print("DEBUG: Wrote credentials.json from environment variable.", flush=True)
+        else:
+            raise Exception("Google credentials not provided in environment variables.")
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
@@ -131,7 +143,7 @@ def get_drive_service():
 def upload_audio_to_gdrive(audio_data, file_name):
     """
     Uploads audio_data to Google Drive in the "Voice" folder,
-    naming the file as file_name, and returns its public URL.
+    names the file as file_name, and returns its public download URL.
     """
     service = get_drive_service()
     file_metadata = {
@@ -143,7 +155,6 @@ def upload_audio_to_gdrive(audio_data, file_name):
                                   media_body=media,
                                   fields='id').execute()
     file_id = file.get('id')
-    # Make file public
     permission = {'type': 'anyone', 'role': 'reader'}
     service.permissions().create(fileId=file_id, body=permission).execute()
     file_info = service.files().get(fileId=file_id, fields='webContentLink').execute()
@@ -191,10 +202,6 @@ def send_to_telegram(message):
     print(f"🔍 Telegram: Sent text, response: {response.text}", flush=True)
 
 def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
-    """
-    Sends the audio file directly to Telegram using sendAudio,
-    with the given caption.
-    """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
     files = {"audio": ("voice.mp3", audio_data, "audio/mpeg")}
     data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
@@ -202,10 +209,6 @@ def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
     print(f"DEBUG: send_voice_to_telegram response: {response.text}", flush=True)
 
 def send_voice_url_to_macrodroid(audio_url, phone, cleaned_text):
-    """
-    Sends a POST request to Macrodroid's /getaudio endpoint with a JSON payload
-    containing the phone number, the cleaned text, and the audio URL.
-    """
     endpoint = f"{MACROTRIGGER_BASE_URL}/getaudio"
     payload = {"phone": phone, "message": f"{cleaned_text}\n{audio_url}"}
     response = requests.post(endpoint, json=payload)
@@ -370,7 +373,7 @@ def create_app():
         conn.close()
         if simp:
             simp_id, simp_name, subscription = simp
-            emoji = ""  # For text messages we might use emoji; adjust as needed.
+            emoji = ""  # For text messages, adjust as desired.
             m = re.match(r'^\s*\d+\s*(.*)', text_message)
             cleaned_message = m.group(1) if m else text_message
             formatted_message = f"{emoji}{simp_id} | {simp_name}: {cleaned_message}"
@@ -420,8 +423,8 @@ def create_app():
         # Voice message command handling: expected format "prefix v/voice_text"
         if "v/" in text_message:
             parts = text_message.split("v/", 1)
-            prefix = parts[0].strip()   # Intended recipient info (e.g., "13")
-            voice_text = parts[1].strip()  # The text to be synthesized
+            prefix = parts[0].strip()   # Intended recipient info, e.g., "13"
+            voice_text = parts[1].strip()  # Text to be synthesized
             phone = ""
             if prefix:
                 m = re.match(r'^(\d+)', prefix)
@@ -442,7 +445,7 @@ def create_app():
                 "phone": phone
             }
             if pending_voice["voice_data"]:
-                # Send the audio preview to Telegram with caption "Yay or nay?"
+                # Send an audio preview with caption "Yay or nay?"
                 send_voice_to_telegram(pending_voice["voice_data"], caption="Yay or nay?")
                 return {"status": "Voice generation triggered, awaiting confirmation"}, 200
             else:
@@ -452,7 +455,6 @@ def create_app():
         # Handle confirmation for pending voice message
         if pending_voice and text_message.lower() in ["send", "next", "cancel"]:
             if text_message.lower() == "send":
-                # Use the voice_text as file name, replacing spaces with underscores
                 file_name = pending_voice["voice_text"].replace(" ", "_") + ".mp3"
                 gdrive_url = upload_audio_to_gdrive(pending_voice["voice_data"], file_name)
                 if gdrive_url:
@@ -477,7 +479,7 @@ def create_app():
                 send_to_telegram("Voice message canceled.")
                 return {"status": "Voice message canceled"}, 200
 
-        # Process other commands (smart strings, diary, etc.) as before...
+        # Process other commands (smart strings, diary, etc.)
         smart_matches = re.findall(r'\{([^}]+)\}', text_message)
         for key in smart_matches:
             key_lower = key.lower()
@@ -517,8 +519,7 @@ def create_app():
                 lines = []
                 for rec in records:
                     simp_id, simp_name, notes, subscription = rec
-                    note_field = notes if notes else "empty"
-                    line = f"{simp_id} | {simp_name} | {note_field}"
+                    line = f"{simp_id} | {simp_name} | {notes if notes else 'empty'}"
                     lines.append(line)
                 reply_message = "\n".join(lines)
             print(f"🔍 /receive_telegram_message: Sending diary reply:\n{reply_message}", flush=True)
