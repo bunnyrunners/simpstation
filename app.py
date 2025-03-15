@@ -3,10 +3,11 @@ import re
 import random
 import time
 import threading
-import base64
+import io
 import psycopg2
 import requests
 from flask import Flask, request
+from pydub import AudioSegment
 
 # Environment variables
 DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL URL from Render
@@ -30,7 +31,7 @@ processed_updates = set()
 pending_diary = False
 
 # Global pending voice message store (for ElevenLabs voice integration)
-# It will store: regular_text, voice_text, and voice_data (binary)
+# It will store: regular_text, voice_text, and voice_data (binary, compressed)
 pending_voice = None
 
 # Smart strings dictionary (keys stored in lower-case)
@@ -95,7 +96,6 @@ diary_responses = [
     "Okay then! 🤔"
 ]
 
-
 def get_db_connection():
     try:
         print("🔍 DB: Attempting to connect to PostgreSQL...", flush=True)
@@ -105,7 +105,6 @@ def get_db_connection():
     except Exception as e:
         print(f"❌ DB: Connection failed: {e}", flush=True)
         return None
-
 
 def init_db():
     print("🔍 DB: Initializing database...", flush=True)
@@ -162,7 +161,6 @@ def init_db():
     conn.close()
     print("🔍 DB: Starting Airtable sync...", flush=True)
     sync_airtable_to_postgres()
-
 
 def sync_airtable_to_postgres():
     print("🔍 Sync: Fetching Airtable data...", flush=True)
@@ -228,7 +226,6 @@ def sync_airtable_to_postgres():
     conn.close()
     print("✅ Sync: Airtable sync complete!", flush=True)
 
-
 def select_emoji(subscription):
     if subscription is None or subscription == "":
         return "💀"
@@ -251,7 +248,6 @@ def select_emoji(subscription):
     else:
         return "💀"
 
-
 def send_to_telegram(message):
     print(f"🔍 Telegram: Sending text to Telegram: '{message}'", flush=True)
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -259,51 +255,55 @@ def send_to_telegram(message):
     response = requests.post(url, json=payload)
     print(f"🔍 Telegram: Sent text, response: {response.text}", flush=True)
 
-
 def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
-    # Sends the audio file directly to Telegram using sendAudio.
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
     files = {"audio": ("voice.mp3", audio_data, "audio/mpeg")}
     data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
     response = requests.post(url, data=data, files=files)
     print(f"DEBUG: send_voice_to_telegram response: {response.text}", flush=True)
 
-
 def send_voice_to_macrodroid(audio_data, message):
-    # Sends the audio file to Macrodroid via multipart/form-data.
     files = {"voice": ("voice.mp3", audio_data, "audio/mpeg")}
     data = {"message": message}
     response = requests.post(MACROTRIGGER_URL, data=data, files=files)
     print(f"DEBUG: send_voice_to_macrodroid response: {response.text}", flush=True)
 
+def compress_audio(audio_data, target_bitrate="16k"):
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
+        output_buffer = io.BytesIO()
+        audio.export(output_buffer, format="mp3", bitrate=target_bitrate)
+        compressed_data = output_buffer.getvalue()
+        print(f"DEBUG: Compressed audio to {len(compressed_data)} bytes", flush=True)
+        return compressed_data
+    except Exception as e:
+        print(f"❌ Error compressing audio: {e}", flush=True)
+        return audio_data  # Fallback: return original
 
 def generate_voice_message(voice_text):
-    # Generate voice using ElevenLabs; returns binary audio data.
     elevenlabs_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json",
         "User-Agent": "PostmanRuntime/7.43.0"
-        # Note: Removing "Accept" header since the endpoint returns binary audio.
     }
     data = {"text": voice_text}
     response = requests.post(elevenlabs_url, json=data, headers=headers)
     print(f"DEBUG: ElevenLabs response status: {response.status_code}", flush=True)
-    # Log the raw response text length for debugging (do not print binary data)
     print(f"DEBUG: ElevenLabs response length: {len(response.content)} bytes", flush=True)
     if response.status_code == 200:
-        return response.content  # Return the binary audio data
+        # Compress the binary audio to reduce size
+        compressed = compress_audio(response.content)
+        return compressed
     else:
         print(f"❌ ElevenLabs: Error generating voice message: {response.text}", flush=True)
         return None
-
 
 def run_periodic_sync():
     while True:
         time.sleep(1800)
         print("🔍 Periodic sync triggered.", flush=True)
         sync_airtable_to_postgres()
-
 
 def create_app():
     app = Flask(__name__)
@@ -385,7 +385,6 @@ def create_app():
         # Handle pending voice message confirmations.
         if pending_voice and text_message.lower() in ["send", "next", "cancel"]:
             if text_message.lower() == "send":
-                # Finalize: send the voice file to Macrodroid along with the regular text.
                 final_text = f"{pending_voice['regular_text']}"
                 send_voice_to_macrodroid(pending_voice["voice_data"], final_text)
                 send_to_telegram("Voice message sent!")
@@ -404,7 +403,6 @@ def create_app():
                 send_to_telegram("Voice message canceled.")
                 return {"status": "Voice message canceled"}, 200
 
-        # If the message contains "v/", handle voice message creation.
         if "v/" in text_message:
             parts = text_message.split("v/", 1)
             regular_text = parts[0].strip()  # e.g. "13 How about this?"
@@ -416,14 +414,12 @@ def create_app():
                     "voice_text": voice_text,
                     "voice_data": voice_data
                 }
-                # Send a preview voice message with caption "Yay or nay?"
                 send_voice_to_telegram(voice_data, "Yay or nay?")
                 return {"status": "Voice generation triggered, awaiting confirmation"}, 200
             else:
                 send_to_telegram("Error generating voice message.")
                 return {"error": "Voice generation failed"}, 200
 
-        # Process smart strings and other commands as before...
         smart_matches = re.findall(r'\{([^}]+)\}', text_message)
         for key in smart_matches:
             key_lower = key.lower()
