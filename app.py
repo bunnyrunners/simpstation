@@ -3,6 +3,7 @@ import re
 import random
 import time
 import threading
+import base64
 import psycopg2
 import requests
 from flask import Flask, request
@@ -19,7 +20,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
-# Macrodroid trigger URL for replies
+# Macrodroid trigger URL for replies (assumed to accept multipart file uploads)
 MACROTRIGGER_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f/reply"
 
 # In-memory store for processed Telegram update IDs (to avoid duplicate processing)
@@ -29,6 +30,7 @@ processed_updates = set()
 pending_diary = False
 
 # Global pending voice message store (for ElevenLabs voice integration)
+# It will store: regular_text, voice_text, and voice_data (binary)
 pending_voice = None
 
 # Smart strings dictionary (keys stored in lower-case)
@@ -113,7 +115,6 @@ def init_db():
         return
     cursor = conn.cursor()
     try:
-        # Create the table if it doesn't exist.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS simps (
                 simp_id SERIAL PRIMARY KEY,
@@ -130,7 +131,6 @@ def init_db():
     except Exception as e:
         print(f"❌ DB: Error during DB initialization: {e}", flush=True)
     
-    # Add the subscription column if it doesn't exist.
     try:
         cursor.execute("""
             ALTER TABLE simps
@@ -141,7 +141,6 @@ def init_db():
     except Exception as e:
         print(f"⚠️ DB: Could not alter 'subscription' column: {e}", flush=True)
     
-    # Add the new notes column if it doesn't exist.
     try:
         cursor.execute("""
             ALTER TABLE simps
@@ -152,7 +151,6 @@ def init_db():
     except Exception as e:
         print(f"⚠️ DB: Could not alter 'notes' column: {e}", flush=True)
     
-    # Ensure the phone column is stored as TEXT.
     try:
         cursor.execute("ALTER TABLE simps ALTER COLUMN phone TYPE TEXT USING phone::text;")
         conn.commit()
@@ -185,7 +183,6 @@ def sync_airtable_to_postgres():
     cursor.execute("DELETE FROM simps")
     for record in records:
         fields = record.get("fields", {})
-        # Process the Subscription field.
         sub_raw = fields.get("Subscription")
         sub_value = None
         if sub_raw is not None:
@@ -199,7 +196,6 @@ def sync_airtable_to_postgres():
             except Exception as e:
                 print(f"❌ Sync: Error processing Subscription value: {e}", flush=True)
                 sub_value = None
-        # Fetch the Notes field.
         notes = fields.get("Notes")
         try:
             cursor.execute("""
@@ -240,7 +236,6 @@ def select_emoji(subscription):
         sub = float(subscription)
     except (ValueError, TypeError):
         return "💀"
-    
     if sub >= 92:
         return "😍"
     elif sub >= 62:
@@ -258,41 +253,52 @@ def select_emoji(subscription):
 
 
 def send_to_telegram(message):
-    print(f"🔍 Telegram: Sending message to Telegram: '{message}'", flush=True)
+    print(f"🔍 Telegram: Sending text to Telegram: '{message}'", flush=True)
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     response = requests.post(url, json=payload)
-    print(f"🔍 Telegram: Sent message, response: {response.text}", flush=True)
+    print(f"🔍 Telegram: Sent text, response: {response.text}", flush=True)
+
+
+def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
+    # Sends the audio file directly to Telegram using sendAudio.
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
+    files = {"audio": ("voice.mp3", audio_data, "audio/mpeg")}
+    data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
+    response = requests.post(url, data=data, files=files)
+    print(f"DEBUG: send_voice_to_telegram response: {response.text}", flush=True)
+
+
+def send_voice_to_macrodroid(audio_data, message):
+    # Sends the audio file to Macrodroid via multipart/form-data.
+    files = {"voice": ("voice.mp3", audio_data, "audio/mpeg")}
+    data = {"message": message}
+    response = requests.post(MACROTRIGGER_URL, data=data, files=files)
+    print(f"DEBUG: send_voice_to_macrodroid response: {response.text}", flush=True)
 
 
 def generate_voice_message(voice_text):
-    # Use the tested format for ElevenLabs with the specified User-Agent
+    # Generate voice using ElevenLabs; returns binary audio data.
     elevenlabs_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json",
         "User-Agent": "PostmanRuntime/7.43.0"
+        # Note: Removing "Accept" header since the endpoint returns binary audio.
     }
     data = {"text": voice_text}
     response = requests.post(elevenlabs_url, json=data, headers=headers)
     print(f"DEBUG: ElevenLabs response status: {response.status_code}", flush=True)
-    print(f"DEBUG: ElevenLabs response text: {response.text}", flush=True)
+    # Log the raw response text length for debugging (do not print binary data)
+    print(f"DEBUG: ElevenLabs response length: {len(response.content)} bytes", flush=True)
     if response.status_code == 200:
-        try:
-            result = response.json()
-            audio_url = result.get("audio_url")
-        except Exception as e:
-            print(f"❌ ElevenLabs: Failed to decode JSON: {response.text}", flush=True)
-            return None
-        print(f"✅ ElevenLabs: Generated voice message at {audio_url}", flush=True)
-        return audio_url
+        return response.content  # Return the binary audio data
     else:
         print(f"❌ ElevenLabs: Error generating voice message: {response.text}", flush=True)
         return None
 
 
 def run_periodic_sync():
-    # Run the Airtable sync every 30 minutes.
     while True:
         time.sleep(1800)
         print("🔍 Periodic sync triggered.", flush=True)
@@ -304,12 +310,8 @@ def create_app():
     print(f"🔍 App: DATABASE_URL = {DATABASE_URL}", flush=True)
     if not DATABASE_URL:
         raise Exception("❌ App: DATABASE_URL not set!")
-    
-    # Initialize the database on startup.
     with app.app_context():
         init_db()
-    
-    # Start the periodic sync in a background thread.
     threading.Thread(target=run_periodic_sync, daemon=True).start()
 
     @app.route("/receive_text", methods=["POST"])
@@ -334,10 +336,8 @@ def create_app():
         if simp:
             simp_id, simp_name, subscription = simp
             emoji = select_emoji(subscription)
-            # Extract the leading number (simp_id) from the message and then remove it.
             m = re.match(r'^\s*\d+\s*(.*)', text_message)
             cleaned_message = m.group(1) if m else text_message
-            # Include both emoji and simp_id and simp_name.
             formatted_message = f"{emoji} {simp_id} | {simp_name}: {cleaned_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
@@ -370,15 +370,12 @@ def create_app():
         print("🔍 /receive_telegram_message: Received a POST request", flush=True)
         update = request.json
         print(f"🔍 /receive_telegram_message: Update received: {update}", flush=True)
-        
-        # Track processed update IDs to prevent duplicate processing.
         update_id = update.get("update_id")
         if update_id in processed_updates:
             print(f"🔍 Duplicate update {update_id} received. Ignoring.", flush=True)
             return {"status": "OK"}, 200
         else:
             processed_updates.add(update_id)
-        
         message = update.get("message", {})
         text_message = message.get("text")
         if not text_message:
@@ -388,24 +385,17 @@ def create_app():
         # Handle pending voice message confirmations.
         if pending_voice and text_message.lower() in ["send", "next", "cancel"]:
             if text_message.lower() == "send":
-                final_payload = {
-                    "message": f"{pending_voice['regular_text']} (Voice: {pending_voice['voice_audio_url']})",
-                    "voice_url": pending_voice["voice_audio_url"]
-                }
-                try:
-                    response = requests.post(MACROTRIGGER_URL, json=final_payload)
-                    print(f"🔍 /receive_telegram_message: Sent final voice payload, response: {response.text}", flush=True)
-                    send_to_telegram("Voice message sent!")
-                except Exception as e:
-                    print(f"❌ /receive_telegram_message: Error sending voice payload: {e}", flush=True)
-                    send_to_telegram("Error sending voice message.")
+                # Finalize: send the voice file to Macrodroid along with the regular text.
+                final_text = f"{pending_voice['regular_text']}"
+                send_voice_to_macrodroid(pending_voice["voice_data"], final_text)
+                send_to_telegram("Voice message sent!")
                 pending_voice = None
                 return {"status": "Voice message sent"}, 200
             elif text_message.lower() == "next":
-                new_voice_audio_url = generate_voice_message(pending_voice["voice_text"])
-                if new_voice_audio_url:
-                    pending_voice["voice_audio_url"] = new_voice_audio_url
-                    send_to_telegram(f"Yay or nay – {new_voice_audio_url}")
+                new_voice_data = generate_voice_message(pending_voice["voice_text"])
+                if new_voice_data:
+                    pending_voice["voice_data"] = new_voice_data
+                    send_voice_to_telegram(new_voice_data, "Yay or nay – (new version)")
                 else:
                     send_to_telegram("Error generating new voice message.")
                 return {"status": "Voice message updated"}, 200
@@ -418,22 +408,22 @@ def create_app():
         if "v/" in text_message:
             parts = text_message.split("v/", 1)
             regular_text = parts[0].strip()  # e.g. "13 How about this?"
-            voice_text = parts[1].strip()    # e.g. "this is a voice message"
-            voice_audio_url = generate_voice_message(voice_text)
-            if voice_audio_url:
+            voice_text = parts[1].strip()    # e.g. "coconuts"
+            voice_data = generate_voice_message(voice_text)
+            if voice_data:
                 pending_voice = {
                     "regular_text": regular_text,
                     "voice_text": voice_text,
-                    "voice_audio_url": voice_audio_url
+                    "voice_data": voice_data
                 }
-                confirmation_message = f"Yay or nay – {voice_audio_url}"
-                send_to_telegram(confirmation_message)
+                # Send a preview voice message with caption "Yay or nay?"
+                send_voice_to_telegram(voice_data, "Yay or nay?")
                 return {"status": "Voice generation triggered, awaiting confirmation"}, 200
             else:
                 send_to_telegram("Error generating voice message.")
                 return {"error": "Voice generation failed"}, 200
 
-        # Smart string replacement: Look for words inside curly braces.
+        # Process smart strings and other commands as before...
         smart_matches = re.findall(r'\{([^}]+)\}', text_message)
         for key in smart_matches:
             key_lower = key.lower()
@@ -445,7 +435,6 @@ def create_app():
             else:
                 text_message = text_message.replace("{" + key + "}", smart_strings[key_lower])
         
-        # If the message contains "/smartwords", list all smart strings.
         if "/smartwords" in text_message:
             wordbank_lines = [f"🪪 {{{k}}} - {v}" for k, v in smart_strings.items()]
             wordbank_msg = "\n".join(wordbank_lines)
@@ -453,7 +442,6 @@ def create_app():
             send_to_telegram(wordbank_msg)
             return {"status": "Smartwords sent"}, 200
 
-        # If the message contains "/diary", fetch and list all diary notes.
         if "/diary" in text_message:
             print("🔍 /receive_telegram_message: /diary command detected.", flush=True)
             conn = get_db_connection()
@@ -484,14 +472,12 @@ def create_app():
             send_to_telegram(reply_message)
             return {"status": "Diary reply sent"}, 200
 
-        # If the message contains "/note", trigger diary update mode.
         if "/note" in text_message:
             print("🔍 /receive_telegram_message: /note command detected.", flush=True)
             send_to_telegram("✍🏼When you're ready, leave a note on a simp. (e.g. \"8 gets paid on thursdays\")")
             pending_diary = True
             return {"status": "Diary update mode activated"}, 200
 
-        # If diary update mode is pending, process the diary update.
         if pending_diary:
             m = re.match(r'^\s*(\d+)\s*(.*)', text_message)
             if not m:
@@ -514,7 +500,6 @@ def create_app():
                 return {"error": "DB update failed"}, 200
             cursor.close()
             conn.close()
-            # Retrieve simp_name for confirmation.
             conn = get_db_connection()
             if conn:
                 cursor = conn.cursor()
@@ -533,7 +518,6 @@ def create_app():
             pending_diary = False
             return {"status": "Diary note updated"}, 200
 
-        # If the message contains "/fetchsimps", fetch and list all records (excluding diary notes).
         if "/fetchsimps" in text_message:
             print("🔍 /receive_telegram_message: /fetchsimps command detected.", flush=True)
             conn = get_db_connection()
@@ -563,15 +547,12 @@ def create_app():
             send_to_telegram(reply_message)
             return {"status": "Fetchsimps trigger sent"}, 200
 
-        # Process as a regular text message.
-        # Extract only the leading number as the simp_id and remove it from the message.
         m = re.match(r'^\s*(\d+)\s*(.*)', text_message)
         if not m:
             print("❌ /receive_telegram_message: Could not extract simp_id from message.", flush=True)
             return {"error": "Could not extract simp_id"}, 200
         simp_id_int = int(m.group(1))
-        cleaned_message = m.group(2)  # The remaining message text after the simp_id
-        
+        cleaned_message = m.group(2)
         conn = get_db_connection()
         if not conn:
             return {"error": "DB connection failed"}, 200
@@ -588,7 +569,6 @@ def create_app():
         if record:
             phone, subscription, simp_name = record
             emoji = select_emoji(subscription)
-            # Final message excludes simp_id, simp_name, and emoji.
             final_message = f"{cleaned_message}"
             print(f"🔍 /receive_telegram_message: Sending payload to Macrodroid: {final_message}", flush=True)
             payload = {"phone": phone, "message": final_message}
