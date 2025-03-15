@@ -50,16 +50,16 @@ diary_responses = [
     "Oh wow! 😲",
     "Nice one! 👍",
     "Big yes! 🔥",
-    "Well, damn. 😏",
-    "Respect. 🙌",
+    "Well, damn! 😏",
+    "Respect! 🙌",
     "Not bad! 😎",
     "Let’s go! 🚀",
     "That’s insane! 🤪",
-    "You got it. 💪",
+    "You got it! 💪",
     "Sounds good! 🎵",
     "Oh heck! 😮",
     "Whoa, okay! 😵‍💫",
-    "True that. 📜",
+    "True that! 📜",
     "Oh snap! 📸",
     "Can’t lie! 🤥",
     "That’s crazy! 🌀",
@@ -266,11 +266,12 @@ def send_to_telegram(message):
 
 
 def generate_voice_message(voice_text):
-    # Use the tested format for ElevenLabs
+    # Use the tested format for ElevenLabs with the specified User-Agent
     elevenlabs_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "User-Agent": "PostmanRuntime/7.43.0"
     }
     data = {"text": voice_text}
     response = requests.post(elevenlabs_url, json=data, headers=headers)
@@ -417,7 +418,7 @@ def create_app():
         if "v/" in text_message:
             parts = text_message.split("v/", 1)
             regular_text = parts[0].strip()  # e.g. "13 How about this?"
-            voice_text = parts[1].strip()    # e.g. "this is my voice"
+            voice_text = parts[1].strip()    # e.g. "this is a voice message"
             voice_audio_url = generate_voice_message(voice_text)
             if voice_audio_url:
                 pending_voice = {
