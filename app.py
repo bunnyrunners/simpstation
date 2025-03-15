@@ -15,6 +15,10 @@ AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# ElevenLabs credentials (for voice generation)
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
+
 # Macrodroid trigger URL for replies
 MACROTRIGGER_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f/reply"
 
@@ -23,6 +27,9 @@ processed_updates = set()
 
 # Global flag for diary update mode (triggered by /note command)
 pending_diary = False
+
+# Global pending voice message store (for ElevenLabs voice integration)
+pending_voice = None
 
 # Smart strings dictionary (keys stored in lower-case)
 smart_strings = {
@@ -258,6 +265,24 @@ def send_to_telegram(message):
     print(f"🔍 Telegram: Sent message, response: {response.text}", flush=True)
 
 
+def generate_voice_message(voice_text):
+    elevenlabs_url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    data = {"text": voice_text}
+    response = requests.post(elevenlabs_url, json=data, headers=headers)
+    if response.status_code == 200:
+        # Assuming the API returns JSON with an "audio_url" field
+        audio_url = response.json().get("audio_url")
+        print(f"✅ ElevenLabs: Generated voice message at {audio_url}", flush=True)
+        return audio_url
+    else:
+        print(f"❌ ElevenLabs: Error generating voice message: {response.text}", flush=True)
+        return None
+
+
 def run_periodic_sync():
     # Run the Airtable sync every 30 minutes.
     while True:
@@ -333,7 +358,7 @@ def create_app():
 
     @app.route("/receive_telegram_message", methods=["POST"])
     def receive_telegram_message():
-        global pending_diary
+        global pending_diary, pending_voice
         print("🔍 /receive_telegram_message: Received a POST request", flush=True)
         update = request.json
         print(f"🔍 /receive_telegram_message: Update received: {update}", flush=True)
@@ -351,6 +376,54 @@ def create_app():
         if not text_message:
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
+
+        # Handle pending voice message confirmations.
+        if pending_voice and text_message.lower() in ["send", "next", "cancel"]:
+            if text_message.lower() == "send":
+                final_payload = {
+                    "message": f"{pending_voice['regular_text']} (Voice: {pending_voice['voice_audio_url']})",
+                    "voice_url": pending_voice["voice_audio_url"]
+                }
+                try:
+                    response = requests.post(MACROTRIGGER_URL, json=final_payload)
+                    print(f"🔍 /receive_telegram_message: Sent final voice payload, response: {response.text}", flush=True)
+                    send_to_telegram("Voice message sent!")
+                except Exception as e:
+                    print(f"❌ /receive_telegram_message: Error sending voice payload: {e}", flush=True)
+                    send_to_telegram("Error sending voice message.")
+                pending_voice = None
+                return {"status": "Voice message sent"}, 200
+            elif text_message.lower() == "next":
+                new_voice_audio_url = generate_voice_message(pending_voice["voice_text"])
+                if new_voice_audio_url:
+                    pending_voice["voice_audio_url"] = new_voice_audio_url
+                    send_to_telegram(f"Yay or nay – {new_voice_audio_url}")
+                else:
+                    send_to_telegram("Error generating new voice message.")
+                return {"status": "Voice message updated"}, 200
+            elif text_message.lower() == "cancel":
+                pending_voice = None
+                send_to_telegram("Voice message canceled.")
+                return {"status": "Voice message canceled"}, 200
+
+        # If the message contains "v/", handle voice message creation.
+        if "v/" in text_message:
+            parts = text_message.split("v/", 1)
+            regular_text = parts[0].strip()  # e.g. "I hope you like this"
+            voice_text = parts[1].strip()    # e.g. "Hey baby, I miss you."
+            voice_audio_url = generate_voice_message(voice_text)
+            if voice_audio_url:
+                pending_voice = {
+                    "regular_text": regular_text,
+                    "voice_text": voice_text,
+                    "voice_audio_url": voice_audio_url
+                }
+                confirmation_message = f"Yay or nay – {voice_audio_url}"
+                send_to_telegram(confirmation_message)
+                return {"status": "Voice generation triggered, awaiting confirmation"}, 200
+            else:
+                send_to_telegram("Error generating voice message.")
+                return {"error": "Voice generation failed"}, 200
 
         # Smart string replacement: Look for words inside curly braces.
         smart_matches = re.findall(r'\{([^}]+)\}', text_message)
