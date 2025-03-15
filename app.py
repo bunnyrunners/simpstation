@@ -113,34 +113,18 @@ diary_responses = [
 ]
 
 # ---------- Google Drive Service Functions ----------
+import json
+from google.oauth2.service_account import Credentials
+
 def get_drive_service():
-    """
-    Returns a Google Drive service using OAuth.
-    If 'credentials.json' is not found, writes it out from the
-    GOOGLE_CREDENTIALS_JSON environment variable.
-    """
-    if not os.path.exists('credentials.json'):
-        credentials_content = os.environ.get('GOOGLE_CREDENTIALS_JSON')
-        if credentials_content:
-            with open('credentials.json', 'w') as f:
-                f.write(credentials_content)
-            print("DEBUG: Wrote credentials.json from environment variable.", flush=True)
-        else:
-            raise Exception("Google credentials not provided in environment variables.")
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            # For headless environments, set open_browser=False
-            creds = flow.run_local_server(port=0, open_browser=False)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+    service_account_info = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not service_account_info:
+        raise Exception("Service account credentials not provided in environment variables.")
+    service_account_info = json.loads(service_account_info)
+    creds = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
     service = build('drive', 'v3', credentials=creds)
     return service
+
 
 def upload_audio_to_gdrive(audio_data, file_name):
     """
