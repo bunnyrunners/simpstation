@@ -171,10 +171,10 @@ def generate_voice_message(voice_text):
     data = {
         "text": voice_text,
         "voice_settings": {
-            "stability": 0.33,
-            "similarity_boost": 0.74,
-            "speed": 0.86,
-            "style": 0.28,
+            "stability": 0.26,
+            "similarity_boost": 0.61,
+            "speed": 0.76,
+            "style": 0.31,
             "model_id": "eleven_multilingual_v2"
         }
     }
