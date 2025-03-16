@@ -174,7 +174,8 @@ def generate_voice_message(voice_text):
             "stability": 0.33,
             "similarity_boost": 0.74,
             "speed": 0.86,
-            "style": 0.28
+            "style": 0.28,
+            "model_id": "eleven_multilingual_v2"
         }
     }
     response = requests.post(elevenlabs_url, json=data, headers=headers)
