@@ -479,7 +479,60 @@ def create_app():
                 new_voice_data = generate_voice_message(pending_voice["voice_text"])
                 if new_voice_data:
                     pending_voice["voice_data"] = new_voice_data
-                    send_voice_to_telegram(new_voice_data, caption="Yay or nay? (new version)")
+                    next_captions = [
+                        "Good or garbage? 🗑️",
+                        "Approve or disapprove? ✅",
+                        "Delete this? 🤔",
+                        "Fire or flop? 🔥",
+                        "Worth sending? 📤",
+                        "Should I be embarrassed? 😳",
+                        "Thoughts? 💭",
+                        "Did I ruin everything? 😬",
+                        "Rate this: 10 or 0? 🌟",
+                        "Would you reply? 📩",
+                        "Decent or disaster? 🚀",
+                        "Listenable or unbearable? 🎧",
+                        "Love it or leave? ❤️",
+                        "Forward this? 🔁",
+                        "Forget this happened? 🤭",
+                        "Will I regret this? 😓",
+                        "Genius or nonsense? 🧠",
+                        "Should I be proud? 🏆",
+                        "Roast or respect? 🔥",
+                        "Keep or delete? 💾",
+                        "Send to more people? 📤",
+                        "Big reaction incoming? 😮",
+                        "Waste of time? ⏳",
+                        "Thumbs up or down? 👍",
+                        "Listen again? 🔄",
+                        "Try again? 🤷",
+                        "Overthinking this? 🤔",
+                        "Worth a response? 📩",
+                        "Listen twice? 🎧",
+                        "Awful or okay? 😬",
+                        "Save or scrap? 💾",
+                        "Would this annoy you? 😡",
+                        "Passable or pathetic? 🤨",
+                        "Apology needed? 😅",
+                        "Does this make sense? 🤯",
+                        "Will this get laughs? 😂",
+                        "Shareable or shameful? 🤦",
+                        "Mom-approved? 👩‍👦",
+                        "Too much? 😳",
+                        "Say too much? 😶",
+                        "Ignore this? 🚫",
+                        "Sound normal? 🤨",
+                        "Stop talking? 🤐",
+                        "Argument starter? ⚡",
+                        "Necessary or nah? 🤔",
+                        "Rethink this? 🤦",
+                        "Bold or bad? 😵",
+                        "Anyone else get this? 🤷",
+                        "Trash this? 🗑️",
+                        "Open in public? 📢"
+                    ]
+                    caption = random.choice(next_captions)
+                    send_voice_to_telegram(new_voice_data, caption=caption)
                 else:
                     send_to_telegram("Error generating new voice message.")
                 return {"status": "Voice message updated"}, 200
