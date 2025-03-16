@@ -233,10 +233,10 @@ def generate_voice_message(voice_text):
     data = {
         "text": voice_text,
         "voice_settings": {
-            "stability": 0.33,
-            "similarity_boost": 0.74,
+            "stability": 0.25,
+            "similarity_boost": 0.51,
             "speed": 0.86,
-            "style": 0.28
+            "style": 0.34
         }
     }
     response = requests.post(elevenlabs_url, json=data, headers=headers)
