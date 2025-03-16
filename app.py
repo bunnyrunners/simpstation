@@ -467,7 +467,8 @@ def create_app():
                 gdrive_url = upload_audio_to_gdrive(pending_voice["voice_data"], file_name)
                 if gdrive_url:
                     phone = pending_voice.get("phone", "")
-                    cleaned_text = pending_voice["voice_text"]
+                    # Replace every space with "_" in the final voice message sent to Macrodroid
+                    cleaned_text = pending_voice["voice_text"].replace(" ", "_")
                     send_voice_url_to_macrodroid(gdrive_url, phone, cleaned_text)
                     send_to_telegram("Voice message sent!")
                 else:
