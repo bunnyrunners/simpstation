@@ -18,6 +18,22 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
+# Global Variables
+processed_updates = set()
+pending_diary = False
+pending_voice = None
+
+# Smart strings dictionary (used for text messages)
+smart_strings = {
+    "venmo": "Kelly_marie2697",
+    "cashapp": "Marie2697",
+    "instagram": "four4kelly",
+    "onlyfans": "4kkelly"
+}
+
+
+
+
 # ---------- Utility Functions ----------
 def select_emoji(subscription):
     try:
@@ -36,6 +52,8 @@ def select_emoji(subscription):
         return "😨"
     else:
         return "💀"
+
+
 
 # ---------- Environment Variables ----------
 DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL URL
@@ -110,6 +128,75 @@ preview_captions = [
     "Bold or bad? 😵"
 ]
 
+
+# Global Variables
+processed_updates = set()
+pending_diary = False
+pending_voice = None
+
+# Smart strings dictionary (used for text messages)
+smart_strings = {
+    "venmo": "Kelly_marie2697",
+    "cashapp": "Marie2697",
+    "instagram": "four4kelly",
+    "onlyfans": "4kkelly"
+}
+
+# Diary responses array.
+diary_responses = [
+    "Love it! ❤️",
+    "Dang, okay! 😳",
+    "No way! 🤯",
+    "That’s wild! 🌪️",
+    "I’m in! ✅",
+    "For real? 👀",
+    "Oh wow! 😲",
+    "Nice one! 👍",
+    "Big yes! 🔥",
+    "Well, damn! 😏",
+    "Respect! 🙌",
+    "Not bad! 😎",
+    "Let’s go! 🚀",
+    "That’s insane! 🤪",
+    "You got it! 💪",
+    "Sounds good! 🎵",
+    "Oh heck! 😮",
+    "Whoa, okay! 😵‍💫",
+    "True that! 📜",
+    "Oh snap! 📸",
+    "Can’t lie! 🤥",
+    "That’s crazy! 🌀",
+    "Say less! 🤫",
+    "Alright then! 🤷‍♂️",
+    "Big mood! 🎭",
+    "Sheesh! 🥶",
+    "Wild stuff! 🦁",
+    "Love that! 💖",
+    "I’m shook! 🌊",
+    "Facts! 🔎",
+    "Big vibes! ✨",
+    "Bet! 🎲",
+    "Oh shoot! 🎯",
+    "So true! ✅",
+    "Good call! 📞",
+    "Absolutely! 💯",
+    "I see! 👁️",
+    "That’s deep! 🌊",
+    "Wow, okay! 😮‍💨",
+    "Makes sense! 🤓",
+    "That tracks! 🚆",
+    "No doubt! 🤝",
+    "I feel that! 🎶",
+    "Well, alright! 🤠",
+    "That’s cool! ❄️",
+    "Big energy! ⚡",
+    "Say what! 🤨",
+    "Go off! 🔥",
+    "So be it! 🕊️",
+    "Okay then! 🤔"
+]
+
+
 # Synonyms for confirmation responses
 send_synonyms = {"yes", "love it", "like", "yup", "yeah", "yea", "perfect", "send it", "send"}
 next_synonyms = {"nope", "nah", "another one", "another", "more"}
@@ -174,10 +261,10 @@ def generate_voice_message(voice_text):
     data = {
         "text": voice_text,
         "voice_settings": {
-            "stability": 0.33,
-            "similarity_boost": 0.74,
+            "stability": 0.24,
+            "similarity_boost": 0.51,
             "speed": 0.86,
-            "style": 0.28
+            "style": 0.34
         }
     }
     response = requests.post(elevenlabs_url, json=data, headers=headers)
