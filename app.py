@@ -18,118 +18,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# Global Variables
-processed_updates = set()
-pending_diary = False
-pending_voice = None
-
-# Smart strings dictionary (used for text messages)
-smart_strings = {
-    "venmo": "Kelly_marie2697",
-    "cashapp": "Marie2697",
-    "instagram": "four4kelly",
-    "onlyfans": "4kkelly"
-}
-
-
-
-
-# ---------- Utility Functions ----------
-def select_emoji(subscription):
-    try:
-        sub = float(subscription)
-    except Exception:
-        return "💀"
-    if sub >= 92:
-        return "😍"
-    elif sub >= 62:
-        return "😀"
-    elif sub >= 37:
-        return "🙂"
-    elif sub >= 18:
-        return "😐"
-    elif sub > 0:
-        return "😨"
-    else:
-        return "💀"
-
-
-
-# ---------- Environment Variables ----------
-DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL URL
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
-
-DRIVE_VOICE_FOLDER_ID = os.getenv("DRIVE_VOICE_FOLDER_ID")
-
-MACROTRIGGER_BASE_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f"
-
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
-
 # ---------- Global Variables ----------
-processed_updates = set()
-pending_diary = False
-pending_voice = None
-
-# Preview caption options
-preview_captions = [
-    "Good or garbage? 🗑️",
-    "Approve or disapprove? ✅",
-    "Delete this? 🤔",
-    "Fire or flop? 🔥",
-    "Worth sending? 📤",
-    "Should I be embarrassed? 😳",
-    "Thoughts? 💭",
-    "Did I ruin everything? 😬",
-    "Rate this: 10 or 0? 🌟",
-    "Would you reply? 📩",
-    "Decent or disaster? 🚀",
-    "Listenable or unbearable? 🎧",
-    "Love it or leave? ❤️",
-    "Forward this? 🔁",
-    "Forget this happened? 🤭",
-    "Will I regret this? 😓",
-    "Genius or nonsense? 🧠",
-    "Should I be proud? 🏆",
-    "Roast or respect? 🔥",
-    "Keep or delete? 💾",
-    "Send to more people? 📤",
-    "Big reaction incoming? 😮",
-    "Waste of time? ⏳",
-    "Thumbs up or down? 👍",
-    "Listen again? 🔄",
-    "Try again? 🤷",
-    "Overthinking this? 🤔",
-    "Worth a response? 📩",
-    "Listen twice? 🎧",
-    "Awful or okay? 😬",
-    "Save or scrap? 💾",
-    "Would this annoy you? 😡",
-    "Passable or pathetic? 🤨",
-    "Apology needed? 😅",
-    "Does this make sense? 🤯",
-    "Will this get laughs? 😂",
-    "Shareable or shameful? 🤦",
-    "Mom-approved? 👩‍👦",
-    "Too much? 😳",
-    "Say too much? 😶",
-    "Ignore this? 🚫",
-    "Sound normal? 🤨",
-    "Stop talking? 🤐",
-    "Argument starter? ⚡",
-    "Necessary or nah? 🤔",
-    "Rethink this? 🤦",
-    "Bold or bad? 😵"
-]
-
-
-# Global Variables
 processed_updates = set()
 pending_diary = False
 pending_voice = None
@@ -196,10 +85,93 @@ diary_responses = [
     "Okay then! 🤔"
 ]
 
+# Preview caption options for audio preview
+preview_captions = [
+    "Good or garbage? 🗑️",
+    "Approve or disapprove? ✅",
+    "Delete this? 🤔",
+    "Fire or flop? 🔥",
+    "Worth sending? 📤",
+    "Should I be embarrassed? 😳",
+    "Thoughts? 💭",
+    "Did I ruin everything? 😬",
+    "Rate this: 10 or 0? 🌟",
+    "Would you reply? 📩",
+    "Decent or disaster? 🚀",
+    "Listenable or unbearable? 🎧",
+    "Love it or leave? ❤️",
+    "Forward this? 🔁",
+    "Forget this happened? 🤭",
+    "Will I regret this? 😓",
+    "Genius or nonsense? 🧠",
+    "Should I be proud? 🏆",
+    "Roast or respect? 🔥",
+    "Keep or delete? 💾",
+    "Send to more people? 📤",
+    "Big reaction incoming? 😮",
+    "Waste of time? ⏳",
+    "Thumbs up or down? 👍",
+    "Listen again? 🔄",
+    "Try again? 🤷",
+    "Overthinking this? 🤔",
+    "Worth a response? 📩",
+    "Listen twice? 🎧",
+    "Awful or okay? 😬",
+    "Save or scrap? 💾",
+    "Would this annoy you? 😡",
+    "Passable or pathetic? 🤨",
+    "Apology needed? 😅",
+    "Does this make sense? 🤯",
+    "Will this get laughs? 😂",
+    "Shareable or shameful? 🤦",
+    "Mom-approved? 👩‍👦",
+    "Too much? 😳",
+    "Say too much? 😶",
+    "Ignore this? 🚫",
+    "Sound normal? 🤨",
+    "Stop talking? 🤐",
+    "Argument starter? ⚡",
+    "Necessary or nah? 🤔",
+    "Rethink this? 🤦",
+    "Bold or bad? 😵"
+]
+
+
+def select_emoji(subscription):
+    try:
+        sub = float(subscription)
+    except Exception:
+        return "💀"
+    if sub >= 92:
+        return "😍"
+    elif sub >= 62:
+        return "😀"
+    elif sub >= 37:
+        return "🙂"
+    elif sub >= 18:
+        return "😐"
+    elif sub > 0:
+        return "😨"
+    else:
+        return "💀"
+
 
 # Synonyms for confirmation responses
 send_synonyms = {"yes", "love it", "like", "yup", "yeah", "yea", "perfect", "send it", "send"}
 next_synonyms = {"nope", "nah", "another one", "another", "more"}
+
+# ---------- Environment Variables (for credentials) ----------
+DATABASE_URL = os.getenv("DATABASE_URL")
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
+DRIVE_VOICE_FOLDER_ID = os.getenv("DRIVE_VOICE_FOLDER_ID")
+MACROTRIGGER_BASE_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f"
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 # ---------- Google Drive Service Functions ----------
 def get_drive_service():
@@ -261,10 +233,10 @@ def generate_voice_message(voice_text):
     data = {
         "text": voice_text,
         "voice_settings": {
-            "stability": 0.24,
-            "similarity_boost": 0.51,
+            "stability": 0.33,
+            "similarity_boost": 0.74,
             "speed": 0.86,
-            "style": 0.34
+            "style": 0.28
         }
     }
     response = requests.post(elevenlabs_url, json=data, headers=headers)
@@ -506,9 +478,8 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If confirmation command is received but no pending voice exists:
-        if text_message.lower() in {"send", "next", "cancel", "yes", "love it", "like", "yup", "yeah", "yea", "perfect", "send it",
-                                      "nope", "nah", "another one", "another", "more"} and not pending_voice:
+        # If a confirmation command is received but no pending voice exists:
+        if text_message.lower() in send_synonyms.union(next_synonyms, {"cancel"}) and not pending_voice:
             send_to_telegram("No pending voice message.")
             return {"status": "No pending voice message"}, 200
 
