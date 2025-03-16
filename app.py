@@ -168,7 +168,15 @@ def generate_voice_message(voice_text):
         "Content-Type": "application/json",
         "User-Agent": "PostmanRuntime/7.43.0"
     }
-    data = {"text": voice_text}
+    data = {
+        "text": voice_text,
+        "voice_settings": {
+            "stability": 0.33,
+            "similarity_boost": 0.74,
+            "speed": 0.86,
+            "style": 0.28
+        }
+    }
     response = requests.post(elevenlabs_url, json=data, headers=headers)
     print(f"DEBUG: ElevenLabs response status: {response.status_code}", flush=True)
     print(f"DEBUG: ElevenLabs response length: {len(response.content)} bytes", flush=True)
@@ -178,6 +186,7 @@ def generate_voice_message(voice_text):
     else:
         print(f"❌ ElevenLabs: Error generating voice message: {response.text}", flush=True)
         return None
+
 
 # ---------- Messaging Functions ----------
 def send_to_telegram(message):
