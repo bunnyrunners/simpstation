@@ -5,6 +5,7 @@ import time
 import threading
 import io
 import uuid
+import json
 import psycopg2
 import requests
 from flask import Flask, request
@@ -17,129 +18,131 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# Environment variables
-DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL URL from Render
+# ---------- Utility Functions ----------
+def select_emoji(subscription):
+    try:
+        sub = float(subscription)
+    except Exception:
+        return "💀"
+    if sub >= 92:
+        return "😍"
+    elif sub >= 62:
+        return "😀"
+    elif sub >= 37:
+        return "🙂"
+    elif sub >= 18:
+        return "😐"
+    elif sub > 0:
+        return "😨"
+    else:
+        return "💀"
+
+# ---------- Environment Variables ----------
+DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL URL
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ElevenLabs credentials (for voice generation)
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
-# Google Drive folder ID for storing voice files (the "Voice" folder)
 DRIVE_VOICE_FOLDER_ID = os.getenv("DRIVE_VOICE_FOLDER_ID")
 
-# Base URL for Macrodroid endpoints.
-# For audio messages, we send to /getaudio; for text messages, /reply.
 MACROTRIGGER_BASE_URL = "https://trigger.macrodroid.com/9ddf8fe0-30cd-4343-b88a-4d14641c850f"
 
-# Scopes for Google Drive
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
-# In-memory store for processed Telegram update IDs (to avoid duplicate processing)
+# ---------- Global Variables ----------
 processed_updates = set()
-
-# Global flag for diary update mode (triggered by /note command)
 pending_diary = False
-
-# Global pending voice message store (for ElevenLabs voice integration)
-# It will store: simp_id (if extracted), voice_text (cleaned text sent to ElevenLabs),
-# voice_data (binary at 320kbps), and phone (intended recipient's phone)
 pending_voice = None
 
-# Smart strings dictionary (used for text messages)
-smart_strings = {
-    "venmo": "Kelly_marie2697",
-    "cashapp": "Marie2697",
-    "instagram": "four4kelly",
-    "onlyfans": "4kkelly"
-}
-
-# Diary responses array.
-diary_responses = [
-    "Love it! ❤️",
-    "Dang, okay! 😳",
-    "No way! 🤯",
-    "That’s wild! 🌪️",
-    "I’m in! ✅",
-    "For real? 👀",
-    "Oh wow! 😲",
-    "Nice one! 👍",
-    "Big yes! 🔥",
-    "Well, damn! 😏",
-    "Respect! 🙌",
-    "Not bad! 😎",
-    "Let’s go! 🚀",
-    "That’s insane! 🤪",
-    "You got it! 💪",
-    "Sounds good! 🎵",
-    "Oh heck! 😮",
-    "Whoa, okay! 😵‍💫",
-    "True that! 📜",
-    "Oh snap! 📸",
-    "Can’t lie! 🤥",
-    "That’s crazy! 🌀",
-    "Say less! 🤫",
-    "Alright then! 🤷‍♂️",
-    "Big mood! 🎭",
-    "Sheesh! 🥶",
-    "Wild stuff! 🦁",
-    "Love that! 💖",
-    "I’m shook! 🌊",
-    "Facts! 🔎",
-    "Big vibes! ✨",
-    "Bet! 🎲",
-    "Oh shoot! 🎯",
-    "So true! ✅",
-    "Good call! 📞",
-    "Absolutely! 💯",
-    "I see! 👁️",
-    "That’s deep! 🌊",
-    "Wow, okay! 😮‍💨",
-    "Makes sense! 🤓",
-    "That tracks! 🚆",
-    "No doubt! 🤝",
-    "I feel that! 🎶",
-    "Well, alright! 🤠",
-    "That’s cool! ❄️",
-    "Big energy! ⚡",
-    "Say what! 🤨",
-    "Go off! 🔥",
-    "So be it! 🕊️",
-    "Okay then! 🤔"
+# Preview caption options
+preview_captions = [
+    "Good or garbage? 🗑️",
+    "Approve or disapprove? ✅",
+    "Delete this? 🤔",
+    "Fire or flop? 🔥",
+    "Worth sending? 📤",
+    "Should I be embarrassed? 😳",
+    "Thoughts? 💭",
+    "Did I ruin everything? 😬",
+    "Rate this: 10 or 0? 🌟",
+    "Would you reply? 📩",
+    "Decent or disaster? 🚀",
+    "Listenable or unbearable? 🎧",
+    "Love it or leave? ❤️",
+    "Forward this? 🔁",
+    "Forget this happened? 🤭",
+    "Will I regret this? 😓",
+    "Genius or nonsense? 🧠",
+    "Should I be proud? 🏆",
+    "Roast or respect? 🔥",
+    "Keep or delete? 💾",
+    "Send to more people? 📤",
+    "Big reaction incoming? 😮",
+    "Waste of time? ⏳",
+    "Thumbs up or down? 👍",
+    "Listen again? 🔄",
+    "Try again? 🤷",
+    "Overthinking this? 🤔",
+    "Worth a response? 📩",
+    "Listen twice? 🎧",
+    "Awful or okay? 😬",
+    "Save or scrap? 💾",
+    "Would this annoy you? 😡",
+    "Passable or pathetic? 🤨",
+    "Apology needed? 😅",
+    "Does this make sense? 🤯",
+    "Will this get laughs? 😂",
+    "Shareable or shameful? 🤦",
+    "Mom-approved? 👩‍👦",
+    "Too much? 😳",
+    "Say too much? 😶",
+    "Ignore this? 🚫",
+    "Sound normal? 🤨",
+    "Stop talking? 🤐",
+    "Argument starter? ⚡",
+    "Necessary or nah? 🤔",
+    "Rethink this? 🤦",
+    "Bold or bad? 😵"
 ]
 
-# ---------- Google Drive Service Functions ----------
-import json
-from google.oauth2.service_account import Credentials
+# Synonyms for confirmation responses
+send_synonyms = {"yes", "love it", "like", "yup", "yeah", "yea", "perfect", "send it", "send"}
+next_synonyms = {"nope", "nah", "another one", "another", "more"}
 
+# ---------- Google Drive Service Functions ----------
 def get_drive_service():
-    service_account_info = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-    if not service_account_info:
-        raise Exception("Service account credentials not provided in environment variables.")
-    service_account_info = json.loads(service_account_info)
-    creds = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
+    if not os.path.exists('credentials.json'):
+        credentials_content = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if credentials_content:
+            with open('credentials.json', 'w') as f:
+                f.write(credentials_content)
+            print("DEBUG: Wrote credentials.json from environment variable.", flush=True)
+        else:
+            raise Exception("Google credentials not provided in environment variables.")
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0, open_browser=False)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
     service = build('drive', 'v3', credentials=creds)
     return service
 
-
 def upload_audio_to_gdrive(audio_data, file_name):
-    """
-    Uploads audio_data to Google Drive in the "Voice" folder,
-    names the file as file_name, and returns its public download URL.
-    """
     service = get_drive_service()
-    file_metadata = {
-        'name': file_name,
-        'parents': [DRIVE_VOICE_FOLDER_ID]
-    }
+    file_metadata = {'name': file_name, 'parents': [DRIVE_VOICE_FOLDER_ID]}
     media = MediaIoBaseUpload(io.BytesIO(audio_data), mimetype='audio/mpeg')
-    file = service.files().create(body=file_metadata,
-                                  media_body=media,
-                                  fields='id').execute()
+    file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
     file_id = file.get('id')
     permission = {'type': 'anyone', 'role': 'reader'}
     service.permissions().create(fileId=file_id, body=permission).execute()
@@ -171,11 +174,10 @@ def generate_voice_message(voice_text):
     data = {
         "text": voice_text,
         "voice_settings": {
-            "stability": 0.26,
-            "similarity_boost": 0.61,
-            "speed": 0.76,
-            "style": 0.31,
-            "model_id": "eleven_multilingual_v2"
+            "stability": 0.33,
+            "similarity_boost": 0.74,
+            "speed": 0.86,
+            "style": 0.28
         }
     }
     response = requests.post(elevenlabs_url, json=data, headers=headers)
@@ -188,7 +190,6 @@ def generate_voice_message(voice_text):
         print(f"❌ ElevenLabs: Error generating voice message: {response.text}", flush=True)
         return None
 
-
 # ---------- Messaging Functions ----------
 def send_to_telegram(message):
     print(f"🔍 Telegram: Sending text: '{message}'", flush=True)
@@ -197,7 +198,9 @@ def send_to_telegram(message):
     response = requests.post(url, json=payload)
     print(f"🔍 Telegram: Sent text, response: {response.text}", flush=True)
 
-def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
+def send_voice_to_telegram(audio_data, caption=None):
+    if caption is None:
+        caption = random.choice(preview_captions)
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
     files = {"audio": ("voice.mp3", audio_data, "audio/mpeg")}
     data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
@@ -206,15 +209,10 @@ def send_voice_to_telegram(audio_data, caption="Yay or nay?"):
 
 def send_voice_url_to_macrodroid(audio_url, phone, cleaned_text):
     endpoint = f"{MACROTRIGGER_BASE_URL}/getaudio"
-    payload = {
-        "phone": phone,
-        "message": cleaned_text,
-        "audio_url": audio_url
-    }
+    payload = {"phone": phone, "message": cleaned_text, "audio_url": audio_url}
     response = requests.post(endpoint, json=payload)
     print(f"DEBUG: send_voice_url_to_macrodroid response: {response.text}", flush=True)
     return response
-
 
 # ---------- Database and Airtable Sync Functions ----------
 def get_db_connection():
@@ -374,10 +372,10 @@ def create_app():
         conn.close()
         if simp:
             simp_id, simp_name, subscription = simp
-            emoji = ""  # For text messages, adjust as desired.
+            emoji = select_emoji(subscription)
             m = re.match(r'^\s*\d+\s*(.*)', text_message)
             cleaned_message = m.group(1) if m else text_message
-            formatted_message = f"{emoji}{simp_id} | {simp_name}: {cleaned_message}"
+            formatted_message = f"{emoji} {simp_id} | {simp_name}: {cleaned_message}"
             print(f"🔍 /receive_text: Forwarding formatted message: '{formatted_message}'", flush=True)
             send_to_telegram(formatted_message)
             return {"status": "Message sent"}, 200
@@ -421,8 +419,9 @@ def create_app():
             print("❌ /receive_telegram_message: Missing message text.", flush=True)
             return {"error": "Missing message text"}, 200
 
-        # If a confirmation command ("send", "next", "cancel") is received but no pending voice exists:
-        if text_message.lower() in ["send", "next", "cancel"] and not pending_voice:
+        # If confirmation command is received but no pending voice exists:
+        if text_message.lower() in {"send", "next", "cancel", "yes", "love it", "like", "yup", "yeah", "yea", "perfect", "send it",
+                                      "nope", "nah", "another one", "another", "more"} and not pending_voice:
             send_to_telegram("No pending voice message.")
             return {"status": "No pending voice message"}, 200
 
@@ -453,16 +452,16 @@ def create_app():
                 "phone": phone
             }
             if pending_voice["voice_data"]:
-                # Send an audio preview with caption "Yay or nay?"
-                send_voice_to_telegram(pending_voice["voice_data"], caption="Yay or nay?")
+                send_voice_to_telegram(pending_voice["voice_data"], caption=random.choice(preview_captions))
                 return {"status": "Voice generation triggered, awaiting confirmation"}, 200
             else:
                 send_to_telegram("Error generating voice message.")
                 return {"error": "Voice generation failed"}, 200
 
         # Handle confirmation for pending voice message
-        if pending_voice and text_message.lower() in ["send", "next", "cancel"]:
-            if text_message.lower() == "send":
+        lower_text = text_message.lower().strip()
+        if pending_voice and lower_text in send_synonyms.union(next_synonyms, {"cancel"}):
+            if lower_text in send_synonyms:
                 file_name = pending_voice["voice_text"].replace(" ", "_") + ".mp3"
                 gdrive_url = upload_audio_to_gdrive(pending_voice["voice_data"], file_name)
                 if gdrive_url:
@@ -474,15 +473,15 @@ def create_app():
                     send_to_telegram("Error uploading voice message to Google Drive.")
                 pending_voice = None
                 return {"status": "Voice message sent"}, 200
-            elif text_message.lower() == "next":
+            elif lower_text in next_synonyms:
                 new_voice_data = generate_voice_message(pending_voice["voice_text"])
                 if new_voice_data:
                     pending_voice["voice_data"] = new_voice_data
-                    send_voice_to_telegram(new_voice_data, caption="Yay or nay? (new version)")
+                    send_voice_to_telegram(new_voice_data, caption=random.choice(preview_captions) + " (new version)")
                 else:
                     send_to_telegram("Error generating new voice message.")
                 return {"status": "Voice message updated"}, 200
-            elif text_message.lower() == "cancel":
+            elif lower_text == "cancel":
                 pending_voice = None
                 send_to_telegram("Voice message canceled.")
                 return {"status": "Voice message canceled"}, 200
@@ -527,7 +526,8 @@ def create_app():
                 lines = []
                 for rec in records:
                     simp_id, simp_name, notes, subscription = rec
-                    line = f"{simp_id} | {simp_name} | {notes if notes else 'empty'}"
+                    emoji = select_emoji(subscription)
+                    line = f"{emoji} {simp_id} | {simp_name} | {notes if notes else 'empty'}"
                     lines.append(line)
                 reply_message = "\n".join(lines)
             print(f"🔍 /receive_telegram_message: Sending diary reply:\n{reply_message}", flush=True)
@@ -601,7 +601,8 @@ def create_app():
                 lines = []
                 for rec in records:
                     simp_id, simp_name, intent, subscription, duration = rec
-                    line = f"{simp_id} | {simp_name} | {intent} | {duration} days"
+                    emoji = select_emoji(subscription)
+                    line = f"{emoji} {simp_id} | {simp_name} | {intent} | {duration} days"
                     lines.append(line)
                 reply_message = "\n".join(lines)
             print(f"🔍 /receive_telegram_message: Sending fetchsimps reply:\n{reply_message}", flush=True)
